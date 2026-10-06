@@ -1,0 +1,28 @@
+{
+  "name": "shivi-ai-chatbot",
+  "version": "2.5.0",
+  "description": "Shivi AI — Next-Gen Intelligent Assistant & Chatbot with Multi-Provider AI Engine",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "py": "python python_server.py",
+    "cli": "python shivi.py"
+  },
+  "keywords": [
+    "ai",
+    "chatbot",
+    "gemini",
+    "openai",
+    "groq",
+    "openrouter",
+    "rag",
+    "shivi"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "pptxgenjs": "^4.0.1"
+  }
+}

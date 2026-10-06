@@ -1,0 +1,2103 @@
+<!DOCTYPE html>
+<html lang="en" class="dark" data-theme="cyberpunk" data-font="poppins">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shivi AI — Next-Gen Intelligent Assistant</title>
+    <meta name="description" content="Experience Shivi AI, an ultra-fast, intelligent, and responsive AI companion crafted with modern aesthetics.">
+
+    <!-- Immediate Theme Restoration, Dynamic Injection & Startup Guard -->
+    <script>
+        (function() {
+            try {
+                var theme = localStorage.getItem('theme') || 
+                            localStorage.getItem('shivi_theme') || 
+                            localStorage.getItem('color-mode') || 
+                            'cyberpunk';
+                if (theme === 'dark' || theme === 'midnight') theme = 'cyberpunk';
+                document.documentElement.classList.add('dark', 'theme-dark');
+                document.documentElement.setAttribute('data-theme', theme);
+                if (document.body) {
+                    document.body.classList.add('dark', 'theme-dark');
+                    document.body.setAttribute('data-theme', theme);
+                }
+
+                // App Startup Guard: Inspect session state immediately to prevent direct chat view
+                var signedOut = localStorage.getItem('shivi_signed_out') === 'true';
+                var token = localStorage.getItem('auth_token') || localStorage.getItem('shivi_auth_token') || sessionStorage.getItem('shivi_auth_token');
+                var user = localStorage.getItem('current_user') || localStorage.getItem('shivi_user');
+                if (signedOut || !token || !user) {
+                    document.documentElement.classList.add('unauthenticated');
+                }
+            } catch(e) {}
+        })();
+    </script>
+    
+    <!-- Google Fonts: Poppins, Outfit, Space Grotesk, Inter, Plus Jakarta Sans, JetBrains Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Poppins:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="dark" data-theme="cyberpunk">
+    <!-- Background Ambient Glow -->
+    <div class="ambient-glow glow-1"></div>
+    <div class="ambient-glow glow-2"></div>
+    <div class="ambient-glow glow-3"></div>
+
+    <div class="app-layout">
+        <!-- Sidebar Backdrop for Mobile -->
+        <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="brand-container">
+                    <div class="brand-avatar">
+                        <div class="avatar-glow"></div>
+                        <span class="avatar-sparkle">✨</span>
+                        <div class="avatar-inner">S</div>
+                    </div>
+                    <div class="brand-text">
+                        <div class="brand-title">
+                            <h2>ShiviAI</h2>
+                        </div>
+                    </div>
+                </div>
+                <button class="icon-btn close-sidebar-btn" id="closeSidebarBtn" title="Close Sidebar">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+
+            <!-- New Chat Action -->
+            <div class="sidebar-action">
+                <button class="new-chat-btn" id="newChatBtn">
+                    <i data-lucide="plus"></i>
+                    <span>+ New Chat</span>
+                    <kbd class="shortcut-tag">Ctrl+K</kbd>
+                </button>
+            </div>
+
+            <!-- Persona / Operating Mode Selector -->
+            <div class="sidebar-persona-picker">
+                <div class="persona-picker-header">
+                    <i data-lucide="sparkles" class="picker-icon"></i>
+                    <span class="picker-title">Operating Mode</span>
+                </div>
+                <div class="persona-select-container">
+                    <select id="personaSelect" class="sidebar-persona-select" title="Switch ShiviAI Mode">
+                        <option value="companion" selected>✨ Friendly Companion</option>
+                        <option value="coder">💻 Code Architect</option>
+                        <option value="presentation">📊 Presentation Strategist</option>
+                        <option value="thinker">🧠 Deep Researcher</option>
+                    </select>
+                    <i data-lucide="chevron-down" class="persona-select-arrow"></i>
+                </div>
+            </div>
+
+            <!-- Chat History List -->
+            <div class="history-section">
+                <div class="history-header">
+                    <span class="section-label">Recent Chats</span>
+                    <button class="clear-history-btn" id="clearAllChatsBtn" title="Clear all history">
+                        <i data-lucide="trash-2"></i>
+                    </button>
+                </div>
+                <div class="history-list" id="historyList">
+                    <!-- Dynamic chat session items -->
+                </div>
+            </div>
+
+            <!-- Sidebar Footer Controls -->
+            <div class="sidebar-footer">
+                <button class="sidebar-footer-btn" id="openSettingsBtn" title="Settings">
+                    <i data-lucide="settings"></i>
+                    <span>Settings</span>
+                </button>
+                <button class="sidebar-theme-btn" id="sidebarThemeBtn" title="Switch Theme">
+                    <i data-lucide="palette"></i>
+                </button>
+                <button class="sidebar-logout-btn logout-action" id="sidebarLogoutBtn" title="Log Out" onclick="window.handleLogout(event)">
+                    <i data-lucide="log-out" id="sidebarLogoutIcon"></i>
+                </button>
+
+                <!-- Hidden elements to preserve JS bindings -->
+                <span id="sidebarKnowledgeStatus" style="display: none;"></span>
+                <button id="openBrainBtnSidebar" style="display: none;"></button>
+                <button id="exportChatBtn" style="display: none;"></button>
+            </div>
+        </aside>
+
+        <!-- Main Chat Area -->
+        <main class="chat-main">
+            <!-- Top Navigation Bar -->
+            <header class="chat-header">
+                <!-- 1. LEFT: Sleek text logo "ShiviAI" -->
+                <div class="header-left">
+                    <button class="icon-btn menu-btn" id="menuToggleBtn" title="Toggle Sidebar">
+                        <i data-lucide="menu"></i>
+                    </button>
+                    <div class="brand-text-logo">
+                        <span class="logo-title">Shivi<span class="logo-title-accent">AI</span></span>
+                    </div>
+                    <!-- Sleek Persona / Mode Dropdown in Header -->
+                    <div class="header-persona-dropdown-wrapper" id="headerPersonaWrapper">
+                        <button type="button" class="header-persona-pill" id="headerPersonaPill" title="Operating Mode: Click to switch persona">
+                            <span class="persona-status-dot"></span>
+                            <span class="persona-badge-text" id="currentPersonaBadge">Mode: Friendly Companion</span>
+                            <i data-lucide="chevron-down" class="pill-arrow-icon"></i>
+                        </button>
+                        <div class="header-persona-menu" id="headerPersonaMenu">
+                            <div class="persona-menu-header">Operating Mode &amp; Tone</div>
+                            <button type="button" class="persona-menu-item active" data-persona="companion">
+                                <span class="persona-menu-icon">✨</span>
+                                <div class="persona-menu-content">
+                                    <span class="persona-menu-name">Friendly Companion</span>
+                                    <span class="persona-menu-desc">Warm, conversational, empathetic</span>
+                                </div>
+                                <i data-lucide="check" class="persona-check-mark"></i>
+                            </button>
+                            <button type="button" class="persona-menu-item" data-persona="coder">
+                                <span class="persona-menu-icon">💻</span>
+                                <div class="persona-menu-content">
+                                    <span class="persona-menu-name">Code Architect</span>
+                                    <span class="persona-menu-desc">Structured technical answers &amp; clean code blocks</span>
+                                </div>
+                                <i data-lucide="check" class="persona-check-mark"></i>
+                            </button>
+                            <button type="button" class="persona-menu-item" data-persona="presentation">
+                                <span class="persona-menu-icon">📊</span>
+                                <div class="persona-menu-content">
+                                    <span class="persona-menu-name">Presentation Strategist</span>
+                                    <span class="persona-menu-desc">Analytical, executive summaries &amp; slide outlines</span>
+                                </div>
+                                <i data-lucide="check" class="persona-check-mark"></i>
+                            </button>
+                            <button type="button" class="persona-menu-item" data-persona="thinker">
+                                <span class="persona-menu-icon">🧠</span>
+                                <div class="persona-menu-content">
+                                    <span class="persona-menu-name">Deep Researcher</span>
+                                    <span class="persona-menu-desc">Detailed academic breakdowns &amp; deep analysis</span>
+                                </div>
+                                <i data-lucide="check" class="persona-check-mark"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2. CENTER: Clean view switcher pills: [💬 Chat] | [📊 Presentation] | [🎨 Images] -->
+                <nav class="workspace-tabs-nav" id="workspaceTabsNav" aria-label="Workspace Views">
+                    <button type="button" class="workspace-tab-btn active" id="viewTabChat" data-view="chat" title="Focused Conversation View">
+                        <span>💬 Chat</span>
+                    </button>
+                    <button type="button" class="workspace-tab-btn" id="viewTabPresentation" data-view="presentation" title="Dedicated Full Slide Workspace">
+                        <span>📊 Presentation</span>
+                        <span class="tab-badge-live" id="presentationActiveBadge" style="display: none;">Live</span>
+                    </button>
+                    <button type="button" class="workspace-tab-btn" id="viewTabImage" data-view="image" title="Dedicated Visual Sandbox">
+                        <span>🎨 Images</span>
+                    </button>
+                </nav>
+
+                <!-- 3. RIGHT: User profile avatar/initials only (compact drop-down menu) -->
+                <div class="header-right">
+                    <!-- Speaking Audio Indicator (visible only when speaking) -->
+                    <button class="icon-btn speaking-stop-btn" id="stopSpeakingBtn" title="Stop Voice Playback" style="display: none;">
+                        <span class="audio-waves">
+                            <span></span><span></span><span></span><span></span>
+                        </span>
+                        <span class="speaking-btn-text">Stop</span>
+                        <i data-lucide="square"></i>
+                    </button>
+
+                    <!-- User Profile Avatar Button & Compact Popover -->
+                    <div class="user-profile-dropdown-wrapper" id="userProfileWrapper">
+                        <button type="button" class="user-profile-pill profile-avatar-btn relative cursor-pointer" id="userProfilePillBtn" aria-label="Toggle user menu" title="Account & Tools">
+                            <span class="user-avatar-badge" id="navUserAvatar">U</span>
+                            <span class="user-name-text" id="navUserName">User</span>
+                        </button>
+                        <div class="user-profile-popover" id="userProfilePopover">
+                            <div class="user-popover-header">
+                                <div class="user-popover-avatar" id="popoverUserAvatar">U</div>
+                                <div class="user-popover-info">
+                                    <div class="user-popover-name" id="popoverUserName">Account</div>
+                                    <div class="user-popover-email" id="popoverUserEmail">Unauthenticated</div>
+                                    <span class="user-tier-badge" id="popoverUserTier">PRO MEMBER</span>
+                                </div>
+                            </div>
+                            <div class="user-popover-divider"></div>
+
+                            <!-- Tools & Toggles (Streamlined into compact popover) -->
+                            <button type="button" class="user-popover-item" id="openBrainBtnHeader" title="Brain Knowledge & API Hub">
+                                <i data-lucide="brain"></i>
+                                <span>Brain Knowledge Hub</span>
+                                <span class="custom-badge-pill" id="brainCountBadge">4 KB</span>
+                            </button>
+                            <button type="button" class="user-popover-item" id="openCanvasBtnHeader" title="Split-Screen Canvas Studio">
+                                <i data-lucide="layout-panel-right"></i>
+                                <span>Canvas Studio</span>
+                            </button>
+                            <button type="button" class="user-popover-item" id="voiceToggleBtn" title="Toggle Voice Read Aloud">
+                                <i data-lucide="volume-2" id="voiceIcon"></i>
+                                <span>Voice Read Aloud</span>
+                            </button>
+                            <button type="button" class="user-popover-item" id="sfxToggleBtn" title="Toggle UI Sound Effects">
+                                <i data-lucide="bell" id="sfxIcon"></i>
+                                <span>Sound Effects</span>
+                            </button>
+                            <button type="button" class="user-popover-item" id="clearCurrentChatBtn" title="Clear Chat Screen">
+                                <i data-lucide="refresh-cw"></i>
+                                <span>Clear Screen</span>
+                            </button>
+
+                            <!-- Theme Selector Dropdown Inside Popover -->
+                            <div class="theme-dropdown-container">
+                                <button type="button" class="user-popover-item" id="themeMenuBtn" title="Themes & Palette: Click to change color" onclick="window.cycleTheme(event)">
+                                    <i data-lucide="palette"></i>
+                                    <span>Themes & Palette</span>
+                                </button>
+                                <div class="theme-dropdown-menu" id="themeDropdownMenu">
+                                    <button class="theme-opt active" data-set-theme="cyberpunk">
+                                        <span class="color-preview" style="background: linear-gradient(135deg, #06b6d4, #ec4899);"></span>
+                                        Cyberpunk Dark (Default)
+                                    </button>
+                                    <button class="theme-opt" data-set-theme="emerald">
+                                        <span class="color-preview" style="background: linear-gradient(135deg, #10b981, #061412);"></span>
+                                        Deep Obsidian Emerald
+                                    </button>
+                                    <button class="theme-opt" data-set-theme="violet">
+                                        <span class="color-preview" style="background: linear-gradient(135deg, #8b5cf6, #0d0b18);"></span>
+                                        Midnight Royal Violet
+                                    </button>
+                                    <button class="theme-opt" data-set-theme="amber">
+                                        <span class="color-preview" style="background: linear-gradient(135deg, #f59e0b, #170d06);"></span>
+                                        Sunset Amber Dark
+                                    </button>
+                                    <div class="theme-dropdown-divider"></div>
+                                    <button class="theme-opt theme-opt-custom" id="openCustomThemeDropdownBtn" data-set-theme="custom">
+                                        <span class="color-preview theme-custom-preview"></span>
+                                        <span>Custom Theme Studio</span>
+                                        <span class="custom-badge-pill">Studio</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="user-popover-divider"></div>
+                            <button type="button" class="user-popover-item" id="popoverItemSettings">
+                                <i data-lucide="settings"></i>
+                                <span>Settings & API Keys</span>
+                            </button>
+                            <button type="button" class="user-popover-item logout-action" id="popoverItemLogout" title="Log Out" onclick="window.handleLogout(event)">
+                                <i data-lucide="log-out"></i>
+                                <span>Log Out</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Workspace Views Wrapper -->
+            <div class="workspace-views-wrapper" id="workspaceViewsWrapper">
+
+                <!-- ==========================================
+                     TAB 1: 💬 CHAT CONVERSATION VIEW
+                     ========================================== -->
+                <section class="workspace-view active" id="workspaceViewChat">
+                    <!-- Chat Scroll Container -->
+                    <div class="chat-container" id="chatContainer">
+                <!-- Welcome Hero Screen (Shown when no messages) -->
+                <section class="welcome-hero" id="welcomeHero">
+                    <div class="hero-logo-box">
+                        <div class="hero-halo"></div>
+                        <div class="hero-avatar">
+                            <span class="hero-letter">S</span>
+                        </div>
+                    </div>
+
+                    <h2 class="welcome-title">
+                        Hello! I'm <span class="gradient-text">Shivi</span>.
+                    </h2>
+                    <p class="welcome-subtitle">
+                        How can I assist your creativity, code, ideas, or questions today?
+                    </p>
+
+                    <!-- Quick Starter Prompt Cards -->
+                    <div class="starter-grid">
+                        <div class="starter-card" data-prompt="Explain quantum computing like I'm 10 years old with a fun analogy">
+                            <div class="card-icon">
+                                <i data-lucide="atom"></i>
+                            </div>
+                            <div class="card-content">
+                                <h4>Explain Quantum Physics</h4>
+                                <p>Simple breakdown of quantum computing with a fun analogy</p>
+                            </div>
+                            <i data-lucide="arrow-up-right" class="card-arrow"></i>
+                        </div>
+
+                        <div class="starter-card" data-prompt="Write a modern, responsive card component with HTML and CSS glassmorphism">
+                            <div class="card-icon">
+                                <i data-lucide="code-2"></i>
+                            </div>
+                            <div class="card-content">
+                                <h4>Build UI Components</h4>
+                                <p>Generate slick CSS glassmorphic card component snippet</p>
+                            </div>
+                            <i data-lucide="arrow-up-right" class="card-arrow"></i>
+                        </div>
+
+                        <div class="starter-card" data-prompt="Brainstorm 5 innovative startup ideas combining AI with climate tech">
+                            <div class="card-icon">
+                                <i data-lucide="lightbulb"></i>
+                            </div>
+                            <div class="card-content">
+                                <h4>Brainstorm Startup Ideas</h4>
+                                <p>Creative concepts combining generative AI with climate tech</p>
+                            </div>
+                            <i data-lucide="arrow-up-right" class="card-arrow"></i>
+                        </div>
+
+                        <div class="starter-card" data-prompt="Give me 3 powerful habits to dramatically improve my daily productivity">
+                            <div class="card-icon">
+                                <i data-lucide="sparkles"></i>
+                            </div>
+                            <div class="card-content">
+                                <h4>Boost Daily Productivity</h4>
+                                <p>Actionable micro-habits for hyperfocus and daily energy</p>
+                            </div>
+                            <i data-lucide="arrow-up-right" class="card-arrow"></i>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Messages Stream List -->
+                <div class="messages-list" id="messagesList">
+                    <!-- Messages will be injected here dynamically -->
+                </div>
+
+                <!-- Live Typing Indicator -->
+                <div class="typing-indicator-wrapper" id="typingIndicator" style="display: none;">
+                    <div class="shivi-avatar-tiny">S</div>
+                    <div class="typing-bubble">
+                        <span class="typing-label">Shivi is thinking</span>
+                        <div class="typing-dots">
+                            <span class="dot"></span>
+                            <span class="dot"></span>
+                            <span class="dot"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Action Pills (Above Input) -->
+            <div class="suggestions-bar" id="suggestionsBar">
+                <button type="button" class="action-pill-btn" id="actionPillPpt" title="Create a presentation">
+                    <span>📊 /ppt Topic</span>
+                </button>
+                <button type="button" class="action-pill-btn" id="actionPillImage" title="Generate an image">
+                    <span>🖼️ /image Prompt</span>
+                </button>
+            </div>
+
+            <!-- Streamlined Modern Input Dock -->
+            <footer class="input-dock-container">
+                <form class="input-form" id="chatForm">
+                    <!-- Attachment Preview Bar -->
+                    <div class="attachment-preview-bar" id="attachmentPreviewBar" style="display: none;"></div>
+
+                    <div class="input-wrapper">
+                        <!-- Streamlined [+] Action Menu Button & Popover -->
+                        <div class="input-action-dropdown-wrapper">
+                            <button type="button" class="dock-btn action-menu-btn" id="actionMenuBtn" title="Attachments & Tools (+)">
+                                <i data-lucide="plus" id="actionMenuIcon"></i>
+                            </button>
+                            <div class="input-action-popover" id="inputActionMenu">
+                                <button type="button" class="action-menu-item" id="menuActionUpload">
+                                    <span class="menu-item-emoji">📁</span>
+                                    <div class="menu-item-text">
+                                        <span class="menu-item-title">Upload Files</span>
+                                        <span class="menu-item-desc">Images, PDFs, PPTX, Docs</span>
+                                    </div>
+                                </button>
+                                <button type="button" class="action-menu-item" id="menuActionDrive">
+                                    <span class="menu-item-emoji">☁️</span>
+                                    <div class="menu-item-text">
+                                        <span class="menu-item-title">Add from Google Drive</span>
+                                        <span class="menu-item-desc">Import directly from Cloud</span>
+                                    </div>
+                                </button>
+                                <div class="action-menu-divider"></div>
+                                <button type="button" class="action-menu-item" id="menuActionPpt">
+                                    <span class="menu-item-emoji">📊</span>
+                                    <div class="menu-item-text">
+                                        <span class="menu-item-title">Generate Presentation</span>
+                                        <span class="menu-item-desc">Executive 16:9 in-browser slide deck</span>
+                                    </div>
+                                </button>
+                                <button type="button" class="action-menu-item" id="menuActionImage">
+                                    <span class="menu-item-emoji">🖼️</span>
+                                    <div class="menu-item-text">
+                                        <span class="menu-item-title">Generate AI Image</span>
+                                        <span class="menu-item-desc">High-res artwork & concepts</span>
+                                    </div>
+                                </button>
+                                <button type="button" class="action-menu-item" id="menuActionAttach" style="display: none;">
+                                    <span class="menu-item-emoji">📎</span>
+                                    <div class="menu-item-text">
+                                        <span class="menu-item-title">Attach Document</span>
+                                    </div>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Hidden fallback buttons for backward compatibility -->
+                        <button type="button" id="attachBtn" style="display: none;"></button>
+                        <button type="button" id="openImageGenModalBtn" style="display: none;"></button>
+                        <button type="button" id="quickChipPpt" style="display: none;"></button>
+                        <button type="button" id="quickChipImage" style="display: none;"></button>
+                        <button type="button" id="quickChipCanvas" style="display: none;"></button>
+                        <button type="button" id="quickChipDoc" style="display: none;"></button>
+
+                        <!-- Single Clean Text Input Area -->
+                        <textarea 
+                            id="userInput" 
+                            class="chat-textarea" 
+                            rows="1" 
+                            placeholder="Message Shivi or type /ppt <topic>... (Shift+Enter for newline)"
+                            autocomplete="off"
+                            spellcheck="false"
+                        ></textarea>
+
+                        <!-- Voice Input / Mic Button -->
+                        <button type="button" class="dock-btn voice-btn" id="micBtn" title="Speak to Shivi (Voice Input)">
+                            <i data-lucide="mic" id="micIcon"></i>
+                            <div class="mic-wave" id="micWave"></div>
+                        </button>
+
+                        <!-- Send Button -->
+                        <button type="submit" class="dock-btn send-btn" id="sendBtn" title="Send Message" disabled>
+                            <i data-lucide="arrow-up"></i>
+                        </button>
+                    </div>
+
+                    <!-- Hidden char count element for JS backward compatibility without visual clutter -->
+                    <span id="charCount" style="display: none;"></span>
+                </form>
+            </footer>
+        </section>
+
+                <!-- ==========================================
+                     TAB 2: 📊 DEDICATED PRESENTATION STUDIO
+                     ========================================== -->
+                <section class="workspace-view" id="workspaceViewPresentation" style="display: none;">
+                    <!-- Presentation Studio Top Navigation / Control Toolbar -->
+                    <div class="studio-top-bar">
+                        <div class="studio-meta-left">
+                            <div class="studio-badge-icon">📊</div>
+                            <div class="studio-titles">
+                                <h3 class="studio-deck-title" id="studioDeckTitle">Presentation Studio</h3>
+                                <span class="studio-deck-subtitle" id="studioDeckSubtitle">Interactive 16:9 Canvas Player • Live In-Browser View</span>
+                            </div>
+                        </div>
+
+                        <!-- In-Studio Quick Generator Bar -->
+                        <div class="studio-quick-create-bar">
+                            <input 
+                                type="text" 
+                                id="studioTopicInput" 
+                                class="studio-topic-input" 
+                                placeholder="Enter presentation topic (e.g. Distributed Consensus Protocols)..." 
+                                autocomplete="off"
+                            />
+                            <select id="studioCountSelect" class="studio-select" title="Number of Slides">
+                                <option value="">Dynamic Count</option>
+                                <option value="4">4 Slides</option>
+                                <option value="6" selected>6 Slides</option>
+                                <option value="8">8 Slides</option>
+                                <option value="10">10 Slides</option>
+                                <option value="12">12 Slides</option>
+                            </select>
+                            <select id="studioThemeSelect" class="studio-select" title="Deck Theme">
+                                <option value="dark_modern" selected>Midnight Dark</option>
+                                <option value="editorial">Editorial Slate</option>
+                                <option value="aurora">Emerald Aurora</option>
+                            </select>
+                            <button type="button" class="btn btn-primary btn-sm studio-generate-btn" id="studioGenerateBtn">
+                                <i data-lucide="sparkles"></i>
+                                <span>Generate Deck</span>
+                            </button>
+                        </div>
+
+                        <!-- Studio Actions: Manual Export & Native Fullscreen -->
+                        <div class="studio-actions-right">
+                            <button type="button" class="btn btn-secondary btn-sm studio-export-btn" id="studioExportBtn" title="Download raw PowerPoint file (.pptx)">
+                                <i data-lucide="download"></i>
+                                <span>📥 Export .pptx</span>
+                            </button>
+                            <button type="button" class="icon-btn studio-fullscreen-btn" id="studioFullscreenBtn" title="Present Slides (Native Browser Fullscreen)">
+                                <i data-lucide="maximize-2" id="studioFullscreenIcon"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Presentation Studio Body / Player Workspace -->
+                    <div class="studio-main-body">
+                        <!-- 1. Active Presentation Stage (Widescreen 16:9 Canvas) -->
+                        <div class="studio-player-container" id="studioPlayerContainer">
+                            <!-- Responsive 16:9 Canvas Stage Wrapper -->
+                            <div class="ppt-stage-wrapper" id="pptStageWrapper">
+                                <!-- Floating Fullscreen Exit Control Bar (Auto-hides on inactivity) -->
+                                <div class="ppt-fullscreen-control-bar" id="pptFullscreenControlBar">
+                                    <button type="button" class="ppt-exit-fullscreen-btn" id="pptExitFullscreenBtn" title="Exit Fullscreen (Esc)">
+                                        <i data-lucide="minimize-2"></i>
+                                        <span>Exit Fullscreen</span>
+                                        <kbd class="fullscreen-esc-badge">Esc</kbd>
+                                    </button>
+                                </div>
+
+                                <div class="ppt-slide-stage theme-dark-modern" id="pptSlideStage">
+                                    <!-- Slides render dynamically inside standard 16:9 canvas -->
+                                    <div class="studio-hero-placeholder" id="studioHeroPlaceholder">
+                                        <div class="placeholder-icon">📊</div>
+                                        <h3>Shivi Presentation Studio</h3>
+                                        <p>Generate topic-grounded, executive-ready presentations with zero mandatory file downloads.</p>
+                                        <div class="placeholder-quick-topics">
+                                            <button type="button" class="topic-chip" data-topic="Quantum Computing Architecture">⚛️ Quantum Computing</button>
+                                            <button type="button" class="topic-chip" data-topic="Decentralized Compute & Zero-Knowledge Systems">🔐 Decentralized Systems</button>
+                                            <button type="button" class="topic-chip" data-topic="Biochemical Mechanics of Photosynthesis">🌿 Photosynthesis Mechanics</button>
+                                            <button type="button" class="topic-chip" data-topic="Autonomous Multi-Agent AI Architectures">🤖 Multi-Agent AI</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Native Interactive Controls Bar -->
+                            <div class="ppt-controls-bar" id="pptControlsBar">
+                                <button type="button" class="ppt-nav-btn" id="pptPrevBtn" title="Previous Slide (◀ / PageUp)" disabled>
+                                    <i data-lucide="chevron-left"></i>
+                                    <span>Prev</span>
+                                </button>
+
+                                <div class="ppt-indicator-box">
+                                    <span class="ppt-slide-counter" id="pptSlideCounter">Slide 01 / 01</span>
+                                    <span class="ppt-layout-badge" id="pptLayoutBadge">TITLE SLIDE</span>
+                                </div>
+
+                                <button type="button" class="ppt-nav-btn" id="pptNextBtn" title="Next Slide (▶ / Space / PageDown)" disabled>
+                                    <span>Next</span>
+                                    <i data-lucide="chevron-right"></i>
+                                </button>
+
+                                <!-- Dot Pagination / Numbered Pill Thumbnails Strip -->
+                                <div class="ppt-thumbnails-container">
+                                    <div class="ppt-dots-navigator" id="pptDotsNavigator">
+                                        <!-- Dynamic slide indicators -->
+                                    </div>
+                                </div>
+
+                                <!-- Native Browser Fullscreen Button -->
+                                <button type="button" class="ppt-fullscreen-pill-btn" id="playerFullscreenBtn" title="Present Directly from ShiviAI (Native Fullscreen)">
+                                    <i data-lucide="maximize" id="playerFullscreenIcon"></i>
+                                    <span>Fullscreen</span>
+                                </button>
+                            </div>
+
+                            <!-- Speaker Notes Drawer -->
+                            <div class="ppt-notes-drawer" id="pptNotesDrawer">
+                                <div class="ppt-notes-header">
+                                    <div class="notes-header-left">
+                                        <i data-lucide="notebook-pen"></i>
+                                        <span>Presenter Script & Talking Points</span>
+                                    </div>
+                                    <span class="notes-hint">Spoken talk-track for live delivery</span>
+                                </div>
+                                <p class="ppt-notes-content" id="pptNotesContent">No presenter notes available. Generate a presentation to preview talk-tracks.</p>
+                            </div>
+                        </div>
+
+                        <!-- 2. Generation Progress State (Syncs with LLM generation) -->
+                        <div class="studio-loading-state" id="studioLoadingState" style="display: none;">
+                            <div class="canvas-spinner"></div>
+                            <h4 id="studioLoadingTitle">Architecting Executive Presentation...</h4>
+                            <p id="studioLoadingSubtitle">Grounding core domain invariants, empirical benchmarks, and talk-tracks</p>
+                            <div class="canvas-ppt-steps" id="studioPptSteps">
+                                <div class="ppt-steps-flow">
+                                    <span class="ppt-step-item active" id="studioStep1"><span class="step-num">[1/3]</span> Researching Topic</span>
+                                    <span class="step-arrow">➔</span>
+                                    <span class="ppt-step-item" id="studioStep2"><span class="step-num">[2/3]</span> Generating Deep Content</span>
+                                    <span class="step-arrow">➔</span>
+                                    <span class="ppt-step-item" id="studioStep3"><span class="step-num">[3/3]</span> Styling 16:9 Canvas</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ==========================================
+                     TAB 3: 🖼️ DEDICATED IMAGE STUDIO
+                     ========================================== -->
+                <section class="workspace-view" id="workspaceViewImage" style="display: none;">
+                    <!-- Image Studio Top Control Toolbar -->
+                    <div class="studio-top-bar">
+                        <div class="studio-meta-left">
+                            <div class="studio-badge-icon">🖼️</div>
+                            <div class="studio-titles">
+                                <h3 class="studio-deck-title">AI Image Studio</h3>
+                                <span class="studio-deck-subtitle">Dedicated Visual Sandbox • Flux & SD Generation</span>
+                            </div>
+                        </div>
+
+                        <div class="studio-quick-create-bar" style="flex: 1; max-width: 720px;">
+                            <input 
+                                type="text" 
+                                id="imageStudioPromptInput" 
+                                class="studio-topic-input" 
+                                placeholder="Describe image or artwork in detail (e.g. Cyberpunk samurai in neon rain, 8K photorealistic)..." 
+                                autocomplete="off"
+                            />
+                            <select id="imageStudioStyleSelect" class="studio-select" title="Artistic Style">
+                                <option value="photorealistic" selected>Photorealistic 8K</option>
+                                <option value="anime">Anime Aesthetic</option>
+                                <option value="cyberpunk">Cyberpunk Neon</option>
+                                <option value="oil-painting">Oil Painting</option>
+                                <option value="minimalist">Minimalist Vector</option>
+                            </select>
+                            <button type="button" class="btn btn-primary btn-sm studio-generate-btn" id="imageStudioGenerateBtn">
+                                <i data-lucide="sparkles"></i>
+                                <span>Create Artwork</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Image Studio Workspace -->
+                    <div class="image-studio-workspace">
+                        <div class="image-studio-main-card">
+                            <div class="canvas-image-wrapper">
+                                <img src="" alt="AI Artwork Preview" id="canvasMainImage" class="clickable-preview" style="display: none;" />
+                                <div class="image-empty-placeholder" id="imageEmptyPlaceholder">
+                                    <div class="placeholder-icon">🎨</div>
+                                    <h4>No Artwork Generated Yet</h4>
+                                    <p>Type a prompt above or select a style remix to generate high-resolution AI art.</p>
+                                </div>
+                                <div class="canvas-image-overlay-actions" id="canvasImageActions" style="display: none;">
+                                    <button type="button" class="btn btn-primary btn-sm" id="canvasDownloadImgBtn">
+                                        <i data-lucide="download"></i> Download Image
+                                    </button>
+                                    <button type="button" class="btn btn-secondary btn-sm" id="canvasZoomImgBtn">
+                                        <i data-lucide="maximize"></i> Lightbox
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="canvas-image-meta" id="canvasImageMeta" style="display: none;">
+                                <div class="canvas-prompt-text" id="canvasImagePrompt"></div>
+                                <span class="canvas-image-tag">POLLINATIONS · FLUX (FREE)</span>
+                            </div>
+                        </div>
+
+                        <!-- Quick Style Remix Bar -->
+                        <div class="canvas-remix-section">
+                            <span class="remix-label">🎨 Instant Style Remix:</span>
+                            <div class="remix-chips-row">
+                                <button type="button" class="remix-chip" data-style="photorealistic">📸 Photorealistic 8K</button>
+                                <button type="button" class="remix-chip" data-style="anime">✨ Anime Aesthetic</button>
+                                <button type="button" class="remix-chip" data-style="cyberpunk">🌆 Cyberpunk 3D</button>
+                                <button type="button" class="remix-chip" data-style="oil-painting">🖌️ Oil Painting</button>
+                                <button type="button" class="remix-chip" data-style="minimalist">📐 Minimalist Vector</button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+            </div><!-- /workspace-views-wrapper -->
+        </main>
+
+        <!-- ==========================================
+             INTERACTIVE SPLIT-SCREEN CANVAS / ARTIFACTS PANEL
+             ========================================== -->
+        <aside class="canvas-panel" id="canvasPanel" style="display: none;">
+            <!-- Canvas Header -->
+            <div class="canvas-header">
+                <div class="canvas-header-left">
+                    <div class="canvas-icon-badge" id="canvasTypeBadge">
+                        <i data-lucide="sparkles" id="canvasTypeIcon"></i>
+                    </div>
+                    <div class="canvas-title-group">
+                        <h3 class="canvas-title" id="canvasTitle">Canvas Studio</h3>
+                        <span class="canvas-subtitle" id="canvasSubtitle">Artifacts & Interactive Workspace</span>
+                    </div>
+                </div>
+
+                <div class="canvas-header-actions">
+                    <!-- Tabs -->
+                    <div class="canvas-view-switcher">
+                        <button type="button" class="canvas-tab-btn active" id="canvasTabPreview" title="Visual Interactive Preview">
+                            <i data-lucide="eye"></i>
+                            <span>Preview</span>
+                        </button>
+                        <button type="button" class="canvas-tab-btn" id="canvasTabCode" title="View Source / JSON">
+                            <i data-lucide="code"></i>
+                            <span>Source</span>
+                        </button>
+                    </div>
+
+                    <!-- Fullscreen Toggle -->
+                    <button type="button" class="canvas-icon-btn" id="canvasFullscreenBtn" title="Toggle Fullscreen">
+                        <i data-lucide="maximize-2" id="canvasFullscreenIcon"></i>
+                    </button>
+
+                    <!-- Close Canvas -->
+                    <button type="button" class="canvas-icon-btn canvas-close-btn" id="canvasCloseBtn" title="Close Canvas (Esc)">
+                        <i data-lucide="x"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Canvas Body -->
+            <div class="canvas-body" id="canvasBody">
+                <!-- Preview View -->
+                <div class="canvas-view-pane active" id="canvasPreviewPane">
+                    <!-- Empty State -->
+                    <div class="canvas-empty-state" id="canvasEmptyState">
+                        <div class="empty-icon-box">🎨</div>
+                        <h4>Shivi Canvas Studio</h4>
+                        <p>Generate presentation slides, AI imagery, or code artifacts to see them render in real-time here.</p>
+                        <div class="empty-quick-actions">
+                            <button type="button" class="btn btn-secondary btn-sm" id="emptyCreateImageBtn">
+                                <i data-lucide="image"></i> Create Image
+                            </button>
+                            <button type="button" class="btn btn-primary btn-sm" id="emptyCreatePptBtn">
+                                <i data-lucide="presentation"></i> Create PPT Deck
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Loading / Skeleton State -->
+                    <div class="canvas-loading-state" id="canvasLoadingState" style="display: none;">
+                        <div class="canvas-spinner"></div>
+                        <h4 id="canvasLoadingTitle">Rendering Artifact...</h4>
+                        <p id="canvasLoadingSubtitle">Please wait while Shivi crafts your masterpiece</p>
+                        <div class="canvas-ppt-steps" id="canvasPptSteps" style="display: none;">
+                            <div class="ppt-status-badge">
+                                <span>✨ ShiviAI is structuring and designing your presentation in Canvas...</span>
+                            </div>
+                            <div class="ppt-steps-flow">
+                                <span class="ppt-step-item active" id="canvasStep1"><span class="step-num">[1/3]</span> Researching Topic</span>
+                                <span class="step-arrow">➔</span>
+                                <span class="ppt-step-item" id="canvasStep2"><span class="step-num">[2/3]</span> Generating Deep Content</span>
+                                <span class="step-arrow">➔</span>
+                                <span class="ppt-step-item" id="canvasStep3"><span class="step-num">[3/3]</span> Styling Executive Slides</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 1. Presentation Deck Carousel -->
+                    <div class="canvas-ppt-view" id="canvasPptView" style="display: none;">
+                        <div class="ppt-top-bar">
+                            <div class="ppt-title-meta">
+                                <h4 id="pptDeckTitle">Presentation Title</h4>
+                                <span class="ppt-deck-subtitle" id="pptDeckSubtitle">Subtitle</span>
+                            </div>
+                            <div class="ppt-badge-row">
+                                <select class="ppt-jump-select" id="pptJumpSelect" title="Jump to Slide">
+                                    <option value="0">Slide 1</option>
+                                </select>
+                                <span class="ppt-slide-counter" id="pptSlideCounter">Slide 1 of 5</span>
+                                <button type="button" class="download-ppt-btn btn-sm" id="canvasDownloadPptBtn" title="Download presentation file (.pptx)">
+                                    <i data-lucide="download"></i>
+                                    <span>📥 Download Presentation (.pptx)</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 16:9 Presentation Stage -->
+                        <div class="ppt-stage-container">
+                            <div class="ppt-slide-stage" id="pptSlideStage">
+                                <!-- Active slide content rendered dynamically -->
+                            </div>
+                        </div>
+
+                        <!-- Carousel Navigation -->
+                        <div class="ppt-controls-bar">
+                            <button type="button" class="ppt-nav-btn" id="pptPrevBtn" title="Previous Slide (Left Arrow / PageUp)">
+                                <i data-lucide="chevron-left"></i>
+                                <span>Previous</span>
+                            </button>
+                            <div class="ppt-thumbnails-container">
+                                <div class="ppt-dots-navigator" id="pptDotsNavigator">
+                                    <!-- Dynamic dots / numbered pill thumbnails -->
+                                </div>
+                            </div>
+                            <button type="button" class="ppt-nav-btn" id="pptNextBtn" title="Next Slide (Right Arrow / PageDown)">
+                                <span>Next</span>
+                                <i data-lucide="chevron-right"></i>
+                            </button>
+                        </div>
+
+                        <!-- Speaker Notes Drawer -->
+                        <div class="ppt-notes-drawer" id="pptNotesDrawer">
+                            <div class="ppt-notes-header">
+                                <i data-lucide="notebook-pen"></i>
+                                <span>Presenter Notes</span>
+                            </div>
+                            <p class="ppt-notes-content" id="pptNotesContent">No presenter notes available.</p>
+                        </div>
+                    </div>
+
+                    <!-- 2. Image Studio Canvas View -->
+                    <div class="canvas-image-view" id="canvasImageView" style="display: none;">
+                        <div class="canvas-image-card">
+                            <div class="canvas-image-wrapper">
+                                <img src="" alt="Canvas Preview" id="canvasMainImage" class="clickable-preview" />
+                                <div class="canvas-image-overlay-actions">
+                                    <button type="button" class="btn btn-primary btn-sm" id="canvasDownloadImgBtn">
+                                        <i data-lucide="download"></i> Download Image
+                                    </button>
+                                    <button type="button" class="btn btn-secondary btn-sm" id="canvasZoomImgBtn">
+                                        <i data-lucide="maximize"></i> Lightbox
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="canvas-image-meta">
+                                <div class="canvas-prompt-text" id="canvasImagePrompt"></div>
+                                <span class="canvas-image-tag">POLLINATIONS · FLUX (FREE)</span>
+                            </div>
+                        </div>
+
+                        <!-- Quick Remix Options -->
+                        <div class="canvas-remix-section">
+                            <span class="remix-label">🎨 Quick Style Remix:</span>
+                            <div class="remix-chips-row">
+                                <button type="button" class="remix-chip" data-style="photorealistic">📸 Photorealistic 8K</button>
+                                <button type="button" class="remix-chip" data-style="anime">✨ Anime Aesthetic</button>
+                                <button type="button" class="remix-chip" data-style="cyberpunk">🌆 Cyberpunk 3D</button>
+                                <button type="button" class="remix-chip" data-style="oil-painting">🖌️ Oil Painting</button>
+                                <button type="button" class="remix-chip" data-style="minimalist">📐 Minimalist Vector</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 3. Document / Code Canvas View -->
+                    <div class="canvas-doc-view" id="canvasDocView" style="display: none;">
+                        <div class="canvas-doc-header">
+                            <span class="doc-badge" id="canvasDocType">Code Document</span>
+                            <button type="button" class="btn btn-secondary btn-sm" id="canvasCopyDocBtn">
+                                <i data-lucide="copy"></i> Copy
+                            </button>
+                        </div>
+                        <div class="canvas-doc-content" id="canvasDocContent"></div>
+                    </div>
+                </div>
+
+                <!-- Source Code View -->
+                <div class="canvas-view-pane" id="canvasSourcePane" style="display: none;">
+                    <div class="canvas-source-toolbar">
+                        <span class="source-lang-badge" id="canvasSourceLang">JSON</span>
+                        <button type="button" class="btn btn-secondary btn-sm" id="canvasCopyRawBtn">
+                            <i data-lucide="copy"></i> Copy Source
+                        </button>
+                    </div>
+                    <pre class="canvas-raw-pre"><code id="canvasRawCode" class="language-json"></code></pre>
+                </div>
+            </div>
+
+            <!-- Canvas Backdrop (Mobile Overlay) -->
+            <div class="canvas-backdrop" id="canvasBackdrop"></div>
+        </aside>
+    </div>
+
+    <!-- ==========================================
+         BRAIN & KNOWLEDGE BASE HUB MODAL
+         ========================================== -->
+    <div class="modal-backdrop" id="brainModal">
+        <div class="modal-card modal-card-lg">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <div class="modal-title-icon-brain">
+                        <i data-lucide="brain"></i>
+                    </div>
+                    <div>
+                        <h3>Shivi Brain & Knowledge Hub</h3>
+                        <p class="modal-subtitle">Configure AI API Keys, Custom Brain Memory & Data Storage</p>
+                    </div>
+                </div>
+                <button class="icon-btn close-modal-btn" id="closeBrainBtn" title="Close">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+
+            <!-- Brain Navigation Tabs -->
+            <div class="brain-tab-nav">
+                <button class="brain-tab-btn active" data-tab="providers">
+                    <i data-lucide="key"></i>
+                    <span>AI Chat Engines</span>
+                </button>
+                <button class="brain-tab-btn" data-tab="imagegen">
+                    <i data-lucide="image"></i>
+                    <span>Image Generator & API Keys</span>
+                </button>
+                <button class="brain-tab-btn" data-tab="knowledge">
+                    <i data-lucide="database"></i>
+                    <span>Brain Knowledge Base (<span id="kbCountBadgeTab">4</span>)</span>
+                </button>
+                <button class="brain-tab-btn" data-tab="storage">
+                    <i data-lucide="hard-drive"></i>
+                    <span>Data & File Storage</span>
+                </button>
+            </div>
+
+            <div class="modal-body brain-modal-body">
+                <!-- TAB 1: API KEYS & AI ENGINE -->
+                <div class="brain-tab-pane active" id="pane-providers">
+                    <div class="setting-group">
+                        <label class="setting-title">Select AI Brain Engine</label>
+                        <p class="setting-desc">Choose between built-in offline intelligence or connecting live frontier LLMs with your API key.</p>
+                        <div class="provider-grid">
+                            <label class="provider-card active" data-provider="builtin">
+                                <input type="radio" name="brainProvider" value="builtin" checked>
+                                <div class="provider-header">
+                                    <div class="provider-icon-badge" style="background: rgba(139, 92, 246, 0.2); color: #a78bfa;">
+                                        <i data-lucide="zap"></i>
+                                    </div>
+                                    <strong>Built-in Shivi Engine</strong>
+                                </div>
+                                <p>Instant offline responses with smart knowledge matching</p>
+                                <span class="provider-badge-status free">⚡ Ready & Free</span>
+                            </label>
+
+                            <label class="provider-card" data-provider="gemini">
+                                <input type="radio" name="brainProvider" value="gemini">
+                                <div class="provider-header">
+                                    <div class="provider-icon-badge" style="background: rgba(6, 182, 212, 0.2); color: #22d3ee;">
+                                        <i data-lucide="sparkles"></i>
+                                    </div>
+                                    <strong>Google Gemini</strong>
+                                </div>
+                                <p>Gemini 1.5 Flash, 1.5 Pro, and Gemini 2.0 Flash</p>
+                                <span class="provider-badge-status">🔑 Requires API Key</span>
+                            </label>
+
+                            <label class="provider-card" data-provider="openai">
+                                <input type="radio" name="brainProvider" value="openai">
+                                <div class="provider-header">
+                                    <div class="provider-icon-badge" style="background: rgba(16, 185, 129, 0.2); color: #34d399;">
+                                        <i data-lucide="bot"></i>
+                                    </div>
+                                    <strong>OpenAI</strong>
+                                </div>
+                                <p>GPT-4o, GPT-4o mini, and GPT-3.5 Turbo</p>
+                                <span class="provider-badge-status">🔑 Requires API Key</span>
+                            </label>
+
+                            <label class="provider-card" data-provider="groq">
+                                <input type="radio" name="brainProvider" value="groq">
+                                <div class="provider-header">
+                                    <div class="provider-icon-badge" style="background: rgba(245, 158, 11, 0.2); color: #fbbf24;">
+                                        <i data-lucide="cpu"></i>
+                                    </div>
+                                    <strong>Groq Cloud</strong>
+                                </div>
+                                <p>Ultra-fast Llama 3.3 70B & Mixtral inference (500+ tok/s)</p>
+                                <span class="provider-badge-status free">⚡ Free & Super Fast</span>
+                            </label>
+
+                            <label class="provider-card" data-provider="openrouter">
+                                <input type="radio" name="brainProvider" value="openrouter">
+                                <div class="provider-header">
+                                    <div class="provider-icon-badge" style="background: rgba(236, 72, 153, 0.2); color: #f472b6;">
+                                        <i data-lucide="globe"></i>
+                                    </div>
+                                    <strong>OpenRouter</strong>
+                                </div>
+                                <p>Access Gemini, DeepSeek R1 & Llama 3.3 free models</p>
+                                <span class="provider-badge-status free">🌐 Free Models Available</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- API Key Configuration Section -->
+                    <div class="setting-group" id="apiKeySection" style="display: none;">
+                        <div class="api-key-header-row">
+                            <label class="setting-title" id="apiKeyLabel">Google Gemini API Key</label>
+                            <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener" class="api-help-link" id="apiHelpLink">
+                                <i data-lucide="external-link"></i>
+                                <span id="apiHelpText">Get Free Gemini API Key</span>
+                            </a>
+                        </div>
+                        <div class="api-key-input-wrapper">
+                            <input type="password" id="brainApiKeyInput" class="custom-input" placeholder="Paste your API key here...">
+                            <button type="button" class="icon-btn-sm toggle-key-visibility" id="toggleKeyVisibilityBtn" title="Toggle visibility">
+                                <i data-lucide="eye" id="eyeIcon"></i>
+                            </button>
+                        </div>
+                        <div class="api-model-select-row">
+                            <div class="form-col">
+                                <label class="field-label">AI Model</label>
+                                <select id="brainModelSelect" class="custom-select">
+                                    <option value="gemini-1.5-flash">gemini-1.5-flash (Fast & Recommended)</option>
+                                    <option value="gemini-1.5-pro">gemini-1.5-pro (High Reasoning)</option>
+                                    <option value="gemini-2.0-flash-exp">gemini-2.0-flash-exp (Next-Gen)</option>
+                                </select>
+                            </div>
+                            <button type="button" class="btn btn-secondary test-api-btn" id="testApiBtn">
+                                <i data-lucide="activity"></i>
+                                <span>Test Key</span>
+                            </button>
+                            <button type="button" class="btn btn-secondary save-env-btn" id="saveEnvBtn" title="Save this key to server .env file permanently">
+                                <i data-lucide="save"></i>
+                                <span>Save to .env</span>
+                            </button>
+                        </div>
+                        <div class="api-status-banner" id="apiStatusBanner" style="display: none;"></div>
+                        <div class="backend-key-indicator" id="backendKeyIndicator" style="display: none;">
+                            <i data-lucide="shield-check"></i>
+                            <span>Server .env key active & ready for all queries!</span>
+                        </div>
+                    </div>
+
+                    <!-- System Brain Persona Instructions -->
+                    <div class="setting-group">
+                        <label class="setting-title">Brain System Persona & Custom Rules</label>
+                        <p class="setting-desc">Add global memory instructions that Shivi AI will always follow across conversations.</p>
+                        <textarea id="brainSystemPrompt" class="custom-textarea" rows="3" placeholder="e.g. Always be concise, provide code in modern ES6/TypeScript, and remember that I am a full-stack engineer."></textarea>
+                    </div>
+                </div>
+
+                <!-- TAB 2: AI IMAGE GENERATOR ENGINE & KEYS -->
+                <div class="brain-tab-pane" id="pane-imagegen">
+                    <div class="setting-group">
+                        <label class="setting-title">Select AI Image Generation Engine</label>
+                        <p class="setting-desc">Generate images with Pollinations (100% Free), OpenAI DALL-E 3, or Stability AI.</p>
+                        <div class="provider-grid">
+                            <label class="provider-card image-provider-card active" data-img-provider="pollinations">
+                                <input type="radio" name="imageProviderRadio" value="pollinations" checked>
+                                <div class="provider-header">
+                                    <div class="provider-icon-badge" style="background: rgba(16, 185, 129, 0.2); color: #34d399;">
+                                        <i data-lucide="zap"></i>
+                                    </div>
+                                    <strong>Pollinations Flux (Free)</strong>
+                                </div>
+                                <p>Ultra-fast, high-resolution AI art. No API key required!</p>
+                                <span class="provider-badge-status free">⚡ 100% Free & Unlimited</span>
+                            </label>
+
+                            <label class="provider-card image-provider-card" data-img-provider="openai">
+                                <input type="radio" name="imageProviderRadio" value="openai">
+                                <div class="provider-header">
+                                    <div class="provider-icon-badge" style="background: rgba(6, 182, 212, 0.2); color: #22d3ee;">
+                                        <i data-lucide="sparkles"></i>
+                                    </div>
+                                    <strong>OpenAI DALL-E 3</strong>
+                                </div>
+                                <p>State-of-the-art prompt fidelity & rich hyperrealistic art</p>
+                                <span class="provider-badge-status">🔑 Uses OpenAI API Key</span>
+                            </label>
+
+                            <label class="provider-card image-provider-card" data-img-provider="stability">
+                                <input type="radio" name="imageProviderRadio" value="stability">
+                                <div class="provider-header">
+                                    <div class="provider-icon-badge" style="background: rgba(139, 92, 246, 0.2); color: #a78bfa;">
+                                        <i data-lucide="palette"></i>
+                                    </div>
+                                    <strong>Stability AI (SDXL)</strong>
+                                </div>
+                                <p>Stable Diffusion 3.5 & SDXL Core</p>
+                                <span class="provider-badge-status">🔑 Requires Stability Key</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Image API Key Configuration Section -->
+                    <div class="setting-group" id="imageApiKeySection">
+                        <div class="api-key-header-row">
+                            <label class="setting-title" id="imageApiKeyLabel">Image Generation API Key</label>
+                            <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener" class="api-help-link" id="imageApiHelpLink">
+                                <i data-lucide="external-link"></i>
+                                <span id="imageApiHelpText">Get API Key</span>
+                            </a>
+                        </div>
+                        <div class="api-key-input-wrapper">
+                            <input type="password" id="imageApiKeyInput" class="custom-input" placeholder="Paste your Image API key here (sk-proj-... / sk-...)">
+                            <button type="button" class="icon-btn-sm toggle-key-visibility" id="toggleImageKeyVisibilityBtn" title="Toggle visibility">
+                                <i data-lucide="eye" id="imageEyeIcon"></i>
+                            </button>
+                        </div>
+                        <div class="api-model-select-row">
+                            <div class="form-col">
+                                <label class="field-label">Default Image Style</label>
+                                <select id="defaultImageStyleSelect" class="custom-select">
+                                    <option value="vivid" selected>Vivid & Cinematic</option>
+                                    <option value="photorealistic">Photorealistic (8K Photography)</option>
+                                    <option value="cyberpunk">Cyberpunk Neon & Futuristic</option>
+                                    <option value="anime">Anime & Studio Ghibli Style</option>
+                                    <option value="3d-render">3D Render & Unreal Engine 5</option>
+                                    <option value="oil-painting">Oil Painting Canvas</option>
+                                    <option value="minimalist">Minimalist Vector Art</option>
+                                </select>
+                            </div>
+                            <button type="button" class="btn btn-secondary test-api-btn" id="testImageApiBtn">
+                                <i data-lucide="activity"></i>
+                                <span>Test Engine</span>
+                            </button>
+                            <button type="button" class="btn btn-secondary save-env-btn" id="saveImageEnvBtn" title="Save this key to server .env file permanently">
+                                <i data-lucide="save"></i>
+                                <span>Save to .env</span>
+                            </button>
+                        </div>
+                        <div class="api-status-banner" id="imageApiStatusBanner" style="display: none;"></div>
+                        <div class="backend-key-indicator" id="imageBackendKeyIndicator" style="display: none;">
+                            <i data-lucide="shield-check"></i>
+                            <span>Server Image key configured & active!</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TAB 3: KNOWLEDGE BASE MEMORY -->
+                <div class="brain-tab-pane" id="pane-knowledge">
+                    <div class="kb-toolbar">
+                        <div class="kb-search-box">
+                            <i data-lucide="search"></i>
+                            <input type="text" id="kbSearchInput" placeholder="Search Brain Knowledge Base...">
+                        </div>
+                        <button type="button" class="btn btn-primary btn-sm" id="openAddKbBtn">
+                            <i data-lucide="plus"></i>
+                            <span>Add Knowledge</span>
+                        </button>
+                    </div>
+
+                    <!-- Add / Edit Knowledge Form (Inline Drawer) -->
+                    <div class="kb-editor-card" id="kbEditorCard" style="display: none;">
+                        <div class="kb-editor-header">
+                            <h4 id="kbEditorTitle">Add New Knowledge Memory</h4>
+                            <button type="button" class="icon-btn-sm" id="closeKbEditorBtn"><i data-lucide="x"></i></button>
+                        </div>
+                        <div class="kb-editor-body">
+                            <input type="hidden" id="kbEditId" value="">
+                            <div class="form-row-2">
+                                <div class="form-col">
+                                    <label class="field-label">Document / Topic Title</label>
+                                    <input type="text" id="kbTitleInput" class="custom-input" placeholder="e.g. Project Architecture Guide">
+                                </div>
+                                <div class="form-col">
+                                    <label class="field-label">Category</label>
+                                    <input type="text" id="kbCategoryInput" class="custom-input" placeholder="e.g. Architecture, Rules, Docs">
+                                </div>
+                            </div>
+                            <div class="form-col">
+                                <label class="field-label">Tags (comma-separated)</label>
+                                <input type="text" id="kbTagsInput" class="custom-input" placeholder="e.g. architecture, backend, api">
+                            </div>
+                            <div class="form-col">
+                                <label class="field-label">Knowledge Content / Fact Memory</label>
+                                <textarea id="kbContentInput" class="custom-textarea" rows="4" placeholder="Enter facts, documentation, instructions, or specific details for Shivi to recall during chat..."></textarea>
+                            </div>
+                            <div class="kb-editor-actions">
+                                <button type="button" class="btn btn-secondary btn-sm" id="cancelKbBtn">Cancel</button>
+                                <button type="button" class="btn btn-primary btn-sm" id="saveKbItemBtn">Save Knowledge Item</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Knowledge Base Items List -->
+                    <div class="kb-list" id="kbListContainer">
+                        <!-- Injected dynamically -->
+                    </div>
+                </div>
+
+                <!-- TAB 3: DATA & FILE STORAGE -->
+                <div class="brain-tab-pane" id="pane-storage">
+                    <div class="storage-stats-grid">
+                        <div class="storage-stat-card">
+                            <div class="stat-icon" style="background: rgba(139, 92, 246, 0.15); color: var(--primary);"><i data-lucide="message-square"></i></div>
+                            <div class="stat-info">
+                                <h4 id="statTotalChats">0</h4>
+                                <span>Total Conversations</span>
+                            </div>
+                        </div>
+                        <div class="storage-stat-card">
+                            <div class="stat-icon" style="background: rgba(6, 182, 212, 0.15); color: #22d3ee;"><i data-lucide="messages-square"></i></div>
+                            <div class="stat-info">
+                                <h4 id="statTotalMessages">0</h4>
+                                <span>Total Messages</span>
+                            </div>
+                        </div>
+                        <div class="storage-stat-card">
+                            <div class="stat-icon" style="background: rgba(16, 185, 129, 0.15); color: #34d399;"><i data-lucide="database"></i></div>
+                            <div class="stat-info">
+                                <h4 id="statTotalKnowledge">4</h4>
+                                <span>Knowledge Items</span>
+                            </div>
+                        </div>
+                        <div class="storage-stat-card">
+                            <div class="stat-icon" style="background: rgba(245, 158, 11, 0.15); color: #fbbf24;"><i data-lucide="hard-drive"></i></div>
+                            <div class="stat-info">
+                                <h4 id="statStorageSize">~12 KB</h4>
+                                <span>Local Storage Used</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="storage-actions-card">
+                        <h4>💾 Data File Management & Backup</h4>
+                        <p>Save all chat records, memory facts, and brain knowledge to files on your computer, or restore data from an existing file.</p>
+                        
+                        <div class="storage-btn-row">
+                            <button type="button" class="btn btn-primary" id="btnExportAllData">
+                                <i data-lucide="download"></i>
+                                <span>Save All Data (shivi_data.json)</span>
+                            </button>
+                            <button type="button" class="btn btn-secondary" id="btnExportKnowledgeJson">
+                                <i data-lucide="file-code"></i>
+                                <span>Export Knowledge (knowledge.json)</span>
+                            </button>
+                            <button type="button" class="btn btn-secondary" id="btnImportDataFile">
+                                <i data-lucide="upload"></i>
+                                <span>Import Data from File (JSON)</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="storage-footer-tools">
+                        <button type="button" class="btn-text-danger" id="btnResetKnowledgeDefault">
+                            <i data-lucide="rotate-ccw"></i>
+                            <span>Reload Default Knowledge Base (knowledge.json)</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="closeBrainFooterBtn">Close</button>
+                <button class="btn btn-primary" id="saveBrainHubBtn">Save & Apply Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden file input for importing JSON data files -->
+    <input type="file" id="dataFileInput" accept=".json,application/json" style="display: none;">
+
+    <!-- Settings Modal -->
+    <div class="modal-backdrop" id="settingsModal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <i data-lucide="sliders-horizontal" class="modal-icon"></i>
+                    <h3>Shivi Preferences</h3>
+                </div>
+                <button class="icon-btn close-modal-btn" id="closeSettingsBtn">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+
+            <div class="modal-body">
+                <div class="setting-group">
+                    <label class="setting-title">Theme & Color Customization</label>
+                    <p class="setting-desc">Black & Grey is your active default theme. You can also customize your own color palette with the Theme Studio.</p>
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px;">
+                        <button type="button" class="btn btn-primary" id="openCustomStudioFromSettingsBtn" style="display: flex; align-items: center; gap: 8px;">
+                            <i data-lucide="palette"></i>
+                            <span>Open Custom Theme Studio</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="setting-group">
+                    <label class="setting-title">Typography & Font Family</label>
+                    <p class="setting-desc">Select your preferred typography across the entire interface.</p>
+                    <select id="fontSelect" class="custom-select">
+                        <option value="poppins" selected>Poppins (Warm, Modern & Clean)</option>
+                        <option value="outfit">Outfit (Futuristic & Sleek)</option>
+                        <option value="inter">Inter (Precision & Highly Legible)</option>
+                        <option value="space">Space Grotesk (Tech & Cyber Aesthetic)</option>
+                        <option value="jakarta">Plus Jakarta Sans (Balanced & Elegant)</option>
+                    </select>
+                </div>
+
+                <div class="setting-group">
+                    <label class="setting-title">Voice & Audio Settings</label>
+                    <div class="slider-row">
+                        <span>Speech Rate: <span id="speechRateVal">1.0x</span></span>
+                        <input type="range" id="speechRateSlider" min="0.7" max="1.5" step="0.1" value="1.0" class="custom-slider">
+                    </div>
+                    <div class="slider-row">
+                        <span>UI Sound Effects Volume</span>
+                        <input type="range" id="sfxVolumeSlider" min="0" max="1" step="0.1" value="0.5" class="custom-slider">
+                    </div>
+                </div>
+
+                <div class="setting-group">
+                    <label class="setting-title">Brain & API Management</label>
+                    <p class="setting-desc">Configure AI providers (Gemini, OpenAI, Groq) and memory knowledge in the Brain Hub.</p>
+                    <button type="button" class="btn btn-secondary" id="openBrainFromSettingsBtn">
+                        <i data-lucide="brain"></i>
+                        <span>Open Brain & Knowledge Hub</span>
+                    </button>
+                </div>
+
+                <div class="setting-group">
+                    <label class="setting-title">Account & Session</label>
+                    <p class="setting-desc" id="settingsAccountDesc">Manage your active authentication session and credentials.</p>
+                    <button type="button" class="btn btn-secondary logout-action" id="settingsLogoutBtn" style="color: #ef4444; border-color: rgba(239, 68, 68, 0.3);" onclick="window.handleLogout(event)">
+                        <i data-lucide="log-out"></i>
+                        <span id="settingsLogoutBtnText">Log Out of ShiviAI</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="resetDefaultsBtn">Reset Defaults</button>
+                <button class="btn btn-primary" id="saveSettingsBtn">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Theme Studio Modal -->
+    <div class="modal-backdrop" id="customThemeModal">
+        <div class="modal-card modal-card-lg custom-theme-modal-card">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <div class="modal-title-icon-brain" style="background: linear-gradient(135deg, #71717a, #18181b);">
+                        <i data-lucide="palette"></i>
+                    </div>
+                    <div>
+                        <h3>Custom Theme Studio</h3>
+                        <p class="modal-subtitle">Design your personalized color scheme with real-time live chat preview</p>
+                    </div>
+                </div>
+                <button class="icon-btn close-modal-btn" id="closeCustomThemeBtn" title="Close">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+
+            <div class="modal-body custom-theme-modal-body">
+                <!-- Theme Presets Section -->
+                <div class="theme-studio-section">
+                    <label class="setting-title">⚡ Quick Palette Presets</label>
+                    <p class="setting-desc">Click any preset palette to instantly load colors or use as your foundation.</p>
+                    <div class="preset-palettes-grid" id="presetPalettesGrid">
+                        <!-- Presets dynamically generated in JS -->
+                    </div>
+                </div>
+
+                <!-- Customizer Grid + Live Preview Split -->
+                <div class="theme-customizer-split">
+                    <!-- Color Controls Column -->
+                    <div class="theme-pickers-col">
+                        <label class="setting-title">🎨 Custom Color Controls</label>
+                        <div class="theme-color-controls-grid">
+                            <div class="color-pick-item">
+                                <label for="colorBgMain">Chat Background (Main)</label>
+                                <div class="color-input-combo">
+                                    <input type="color" id="colorBgMain" value="#09090b">
+                                    <input type="text" id="colorBgMainHex" class="hex-text-input" value="#09090b" maxlength="7" spellcheck="false">
+                                </div>
+                            </div>
+                            <div class="color-pick-item">
+                                <label for="colorBgSecondary">Sidebar & Header</label>
+                                <div class="color-input-combo">
+                                    <input type="color" id="colorBgSecondary" value="#121215">
+                                    <input type="text" id="colorBgSecondaryHex" class="hex-text-input" value="#121215" maxlength="7" spellcheck="false">
+                                </div>
+                            </div>
+                            <div class="color-pick-item">
+                                <label for="colorBgCard">Card & Surface</label>
+                                <div class="color-input-combo">
+                                    <input type="color" id="colorBgCard" value="#18181c">
+                                    <input type="text" id="colorBgCardHex" class="hex-text-input" value="#18181c" maxlength="7" spellcheck="false">
+                                </div>
+                            </div>
+                            <div class="color-pick-item">
+                                <label for="colorPrimary">Primary Accent Color</label>
+                                <div class="color-input-combo">
+                                    <input type="color" id="colorPrimary" value="#f4f4f5">
+                                    <input type="text" id="colorPrimaryHex" class="hex-text-input" value="#f4f4f5" maxlength="7" spellcheck="false">
+                                </div>
+                            </div>
+                            <div class="color-pick-item">
+                                <label for="colorUserBubble">User Chat Bubble</label>
+                                <div class="color-input-combo">
+                                    <input type="color" id="colorUserBubble" value="#27272a">
+                                    <input type="text" id="colorUserBubbleHex" class="hex-text-input" value="#27272a" maxlength="7" spellcheck="false">
+                                </div>
+                            </div>
+                            <div class="color-pick-item">
+                                <label for="colorAiBubble">AI Chat Bubble</label>
+                                <div class="color-input-combo">
+                                    <input type="color" id="colorAiBubble" value="#18181c">
+                                    <input type="text" id="colorAiBubbleHex" class="hex-text-input" value="#18181c" maxlength="7" spellcheck="false">
+                                </div>
+                            </div>
+                            <div class="color-pick-item">
+                                <label for="colorTextPrimary">Primary Text</label>
+                                <div class="color-input-combo">
+                                    <input type="color" id="colorTextPrimary" value="#f4f4f5">
+                                    <input type="text" id="colorTextPrimaryHex" class="hex-text-input" value="#f4f4f5" maxlength="7" spellcheck="false">
+                                </div>
+                            </div>
+                            <div class="color-pick-item">
+                                <label for="colorTextMuted">Muted Text Tone</label>
+                                <div class="color-input-combo">
+                                    <input type="color" id="colorTextMuted" value="#71717a">
+                                    <input type="text" id="colorTextMutedHex" class="hex-text-input" value="#71717a" maxlength="7" spellcheck="false">
+                                </div>
+                            </div>
+                            <div class="color-pick-item">
+                                <label for="colorBorder">Border & Subtle Glow</label>
+                                <div class="color-input-combo">
+                                    <input type="color" id="colorBorder" value="#52525b">
+                                    <input type="text" id="colorBorderHex" class="hex-text-input" value="#52525b" maxlength="7" spellcheck="false">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Live Preview Column -->
+                    <div class="theme-preview-col">
+                        <label class="setting-title">👁️ Live Chat Preview</label>
+                        <div class="theme-live-preview-box" id="themeLivePreviewBox">
+                            <div class="preview-header" id="prevHeader">
+                                <div class="preview-avatar" id="prevAvatar">S</div>
+                                <div class="preview-title" id="prevTitle">Shivi AI <span class="preview-badge" id="prevBadge">Preview</span></div>
+                            </div>
+                            <div class="preview-messages" id="prevMessages">
+                                <div class="preview-msg user-preview-msg" id="prevUserMsg">
+                                    <span>Hello Shivi! How does this custom theme look?</span>
+                                </div>
+                                <div class="preview-msg ai-preview-msg" id="prevAiMsg">
+                                    <div class="preview-ai-avatar" id="prevAiAvatar">S</div>
+                                    <div class="preview-ai-content" id="prevAiContent">
+                                        <span>It looks fantastic! Sleek, modern, and completely personalized to your aesthetic taste. ✨</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="preview-dock" id="prevDock">
+                                <div class="preview-input-mock" id="prevInputMock">Ask Shivi anything...</div>
+                                <div class="preview-send-btn" id="prevSendBtn">
+                                    <i data-lucide="arrow-up"></i>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-footer theme-modal-footer">
+                <button type="button" class="btn btn-secondary" id="btnResetToBlackGrey">
+                    <i data-lucide="rotate-ccw"></i>
+                    <span>Reset to Black & Grey</span>
+                </button>
+                <button type="button" class="btn btn-secondary" id="btnExportCustomThemeCss">
+                    <i data-lucide="copy"></i>
+                    <span>Copy CSS Code</span>
+                </button>
+                <button type="button" class="btn btn-primary" id="btnApplyCustomTheme">
+                    <i data-lucide="check"></i>
+                    <span>Save & Apply Custom Theme</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- AI Image Generator Studio Modal -->
+    <div class="modal-backdrop" id="imageGenModal">
+        <div class="modal-card image-studio-modal-card">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <div class="modal-title-icon-brain" style="background: linear-gradient(135deg, #06b6d4, #8b5cf6);">
+                        <i data-lucide="image"></i>
+                    </div>
+                    <div>
+                        <h3>Shivi AI Image Generator</h3>
+                        <p class="modal-subtitle">Generate breathtaking AI artwork directly in your conversation</p>
+                    </div>
+                </div>
+                <button class="icon-btn close-modal-btn" id="closeImageGenBtn" title="Close">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+
+            <div class="modal-body image-studio-modal-body">
+                <div class="setting-group">
+                    <label class="setting-title">What would you like to create?</label>
+                    <textarea id="imagePromptInput" class="custom-textarea" rows="3" placeholder="e.g. A cybernetic cat walking through neon-lit streets of futuristic Tokyo in rain, highly detailed, 8k resolution..."></textarea>
+                    <div class="prompt-ideas-row">
+                        <span class="prompt-idea-label">💡 Ideas:</span>
+                        <button type="button" class="prompt-idea-chip" data-prompt="A majestic glowing phoenix rising from dark obsidian ashes, 8k cinematic lighting, ultra-detailed">🔥 Phoenix</button>
+                        <button type="button" class="prompt-idea-chip" data-prompt="Futuristic hydroponic vertical laboratory floating in space orbit, neon glow, 3d render">🚀 Space Lab</button>
+                        <button type="button" class="prompt-idea-chip" data-prompt="Cozy cyberpunk coffee shop in rainy Kyoto at night, warm atmospheric lighting">☕ Cyber Cafe</button>
+                        <button type="button" class="prompt-idea-chip" data-prompt="Hyperrealistic close-up portrait of an astronaut on Mars reflecting the galaxy in helmet">👨‍🚀 Astronaut</button>
+                    </div>
+                </div>
+
+                <div class="form-row-2">
+                    <div class="form-col">
+                        <label class="field-label">Aesthetic Style</label>
+                        <select id="modalImageStyleSelect" class="custom-select">
+                            <option value="vivid" selected>Vivid & Cinematic</option>
+                            <option value="photorealistic">Photorealistic (8K Master Photography)</option>
+                            <option value="cyberpunk">Cyberpunk Neon & Futuristic</option>
+                            <option value="anime">Anime & Makoto Shinkai Style</option>
+                            <option value="3d-render">3D Render & Unreal Engine 5</option>
+                            <option value="oil-painting">Oil Painting & Canvas</option>
+                            <option value="minimalist">Minimalist Vector & Flat Art</option>
+                        </select>
+                    </div>
+                    <div class="form-col">
+                        <label class="field-label">Aspect Ratio / Size</label>
+                        <select id="modalImageSizeSelect" class="custom-select">
+                            <option value="1024x1024" selected>1:1 Square (1024×1024)</option>
+                            <option value="1280x720">16:9 Landscape (1280×720)</option>
+                            <option value="720x1280">9:16 Portrait (720×1280)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" id="cancelImageGenBtn">Cancel</button>
+                <button type="button" class="btn btn-primary" id="submitImageGenBtn" style="display: flex; align-items: center; gap: 8px;">
+                    <i data-lucide="sparkles"></i>
+                    <span>Generate Image</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick PPT Creation Modal -->
+    <div class="modal-backdrop" id="pptStudioModal" style="display: none;">
+        <div class="modal-card modal-card-md">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <div class="modal-title-icon-brain" style="background: rgba(234, 88, 12, 0.15); color: #f97316;">
+                        <i data-lucide="presentation"></i>
+                    </div>
+                    <div>
+                        <h3>Create Presentation Deck</h3>
+                        <p class="modal-subtitle">AI PowerPoint (.pptx) Creator with Live Canvas Preview</p>
+                    </div>
+                </div>
+                <button type="button" class="icon-btn close-modal-btn" id="closePptModalBtn" title="Close">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+            <div class="modal-body" style="padding: 20px;">
+                <div class="form-group" style="margin-bottom: 16px;">
+                    <label class="form-label" style="font-weight: 600; font-size: 0.85rem; margin-bottom: 6px; display: block;">Presentation Topic / Pitch:</label>
+                    <input type="text" id="pptTopicInput" class="custom-input" placeholder="e.g. Future of Generative AI & Automation" style="width: 100%;" />
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px;">
+                    <div class="form-group">
+                        <label class="form-label" style="font-weight: 600; font-size: 0.85rem; margin-bottom: 6px; display: block;">Slide Count:</label>
+                        <select id="pptSlideCountSelect" class="custom-select" style="width: 100%;">
+                            <option value="auto" selected>✨ Dynamic (Auto-analyzed by AI Depth)</option>
+                            <option value="4">4-6 Slides (Focused / Executive Brief)</option>
+                            <option value="8">8-12 Slides (In-Depth Strategy Guide)</option>
+                            <option value="16">16-20+ Slides (Comprehensive Masterclass)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" style="font-weight: 600; font-size: 0.85rem; margin-bottom: 6px; display: block;">Visual Theme:</label>
+                        <select id="pptThemeSelect" class="custom-select" style="width: 100%;">
+                            <option value="modern_blue" selected>Modern Blue & Slate</option>
+                            <option value="dark_amber">Dark Velvet & Amber</option>
+                            <option value="cyberpunk">Cyber Neon</option>
+                            <option value="emerald">Emerald Minimal</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer" style="padding: 14px 20px; display: flex; justify-content: flex-end; gap: 10px;">
+                <button type="button" class="btn btn-secondary" id="cancelPptModalBtn">Cancel</button>
+                <button type="button" class="btn btn-primary" id="startPptModalBtn" style="background: linear-gradient(135deg, #ea580c, #f97316); border: none;">
+                    <i data-lucide="sparkles"></i> Generate in Canvas
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Fullscreen Image Lightbox Modal -->
+    <div class="image-lightbox-modal" id="imageLightboxModal" style="display: none;">
+        <div class="lightbox-backdrop" id="lightboxBackdrop"></div>
+        <div class="lightbox-content">
+            <button class="lightbox-close-btn" id="lightboxCloseBtn" title="Close Lightbox (Esc)">
+                <i data-lucide="x"></i>
+            </button>
+            <img id="lightboxImg" src="" alt="Full Preview" />
+            <div class="lightbox-bar">
+                <span class="lightbox-caption" id="lightboxCaption"></span>
+                <div class="lightbox-actions">
+                    <button type="button" class="btn btn-secondary btn-sm" id="lightboxDownloadBtn">
+                        <i data-lucide="download"></i> Download Full Image
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Google Drive Cloud Import Modal -->
+    <div class="modal-backdrop" id="googleDriveModal" style="display: none;">
+        <div class="modal-card modal-card-md">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <div class="modal-title-icon-brain" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8;">
+                        <i data-lucide="cloud"></i>
+                    </div>
+                    <div>
+                        <h3>Add from Google Drive</h3>
+                        <p class="modal-subtitle">Import presentations, documents, sheets, or cloud files directly</p>
+                    </div>
+                </div>
+                <button type="button" class="icon-btn close-modal-btn" id="closeGoogleDriveModalBtn" title="Close">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+            <div class="modal-body" style="padding: 20px;">
+                <!-- Drive Mode Tabs -->
+                <div class="gdrive-tabs-nav">
+                    <button type="button" class="gdrive-tab-btn active" id="gdriveTabLinkBtn">
+                        <i data-lucide="link"></i>
+                        <span>Paste Share Link</span>
+                    </button>
+                    <button type="button" class="gdrive-tab-btn" id="gdriveTabPickerBtn">
+                        <i data-lucide="hard-drive"></i>
+                        <span>Cloud Picker (OAuth)</span>
+                    </button>
+                </div>
+
+                <!-- Pane 1: Share Link Import -->
+                <div id="gdriveLinkPane" class="gdrive-pane active">
+                    <div class="form-group" style="margin-bottom: 14px;">
+                        <label class="form-label" style="font-weight: 600; font-size: 0.85rem; margin-bottom: 6px; display: block;">
+                            Google Drive / Docs / Slides URL:
+                        </label>
+                        <div style="display: flex; gap: 8px;">
+                            <input type="url" id="gdriveLinkInput" class="custom-input" placeholder="https://drive.google.com/file/d/... or docs.google.com/presentation/d/..." style="flex: 1;" />
+                            <button type="button" class="btn btn-secondary btn-sm" id="gdrivePasteBtn" title="Paste from clipboard">
+                                <i data-lucide="clipboard"></i> Paste
+                            </button>
+                        </div>
+                        <span style="font-size: 0.74rem; color: var(--text-muted); margin-top: 5px; display: block;">
+                            Supports Google Docs, Slides, Sheets, PDFs, and shared Google Drive files.
+                        </span>
+                    </div>
+
+                    <div class="form-group" style="margin-bottom: 14px;">
+                        <label class="form-label" style="font-weight: 600; font-size: 0.85rem; margin-bottom: 6px; display: block;">
+                            File Name / Label (Optional):
+                        </label>
+                        <input type="text" id="gdriveFileNameInput" class="custom-input" placeholder="Auto-detected or enter custom name" style="width: 100%;" />
+                    </div>
+
+                    <!-- Live File Detection Card -->
+                    <div id="gdriveDetectionCard" class="gdrive-preview-card" style="display: none;">
+                        <div class="gdrive-file-badge">
+                            <div class="gdrive-detect-icon" id="gdriveDetectIcon">📄</div>
+                            <div class="gdrive-detect-meta">
+                                <span class="gdrive-detect-name" id="gdriveDetectName">Document</span>
+                                <span class="gdrive-detect-type" id="gdriveDetectType">Google Drive File</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px;">
+                        <button type="button" class="btn btn-secondary" id="cancelGoogleDriveBtn">Cancel</button>
+                        <button type="button" class="btn btn-primary" id="confirmGoogleDriveBtn">
+                            <i data-lucide="plus"></i> Attach from Drive
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Pane 2: Cloud Picker API -->
+                <div id="gdrivePickerPane" class="gdrive-pane">
+                    <div style="text-align: center; padding: 18px 10px;">
+                        <div style="font-size: 2.5rem; margin-bottom: 8px;">☁️</div>
+                        <h4 style="font-weight: 600; margin-bottom: 6px; color: var(--text-primary);">Google Drive Picker API</h4>
+                        <p style="font-size: 0.82rem; color: var(--text-muted); max-width: 380px; margin: 0 auto 16px; line-height: 1.4;">
+                            Launch the official Google Drive Picker dialog to select files directly from your cloud storage.
+                        </p>
+                        <button type="button" class="btn btn-primary" id="launchGdrivePickerBtn">
+                            <i data-lucide="external-link"></i> Launch Drive Picker
+                        </button>
+                    </div>
+
+                    <div style="margin-top: 14px; border-top: 1px solid var(--border-subtle); padding-top: 12px;">
+                        <details style="font-size: 0.78rem; color: var(--text-muted);">
+                            <summary style="cursor: pointer; font-weight: 600; color: #38bdf8;">⚙️ Configure Google Cloud Credentials (Optional)</summary>
+                            <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 8px;">
+                                <input type="text" id="gdriveApiKeyInput" class="custom-input" placeholder="Google API Developer Key" />
+                                <input type="text" id="gdriveClientIdInput" class="custom-input" placeholder="Google OAuth 2.0 Client ID" />
+                                <button type="button" class="btn btn-sm btn-secondary" id="saveGdriveCredsBtn" style="align-self: flex-start;">Save Credentials</button>
+                            </div>
+                        </details>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden file input for document & media attachment -->
+    <input type="file" id="fileAttachmentInput" style="display: none;" multiple accept="image/*,.png,.jpg,.jpeg,.webp,.pdf,.ppt,.pptx,.txt,.docx,.md,.csv,.json">
+
+    <!-- ==========================================================================
+         ShiviAI Authentication Overlay (Login / Signup / Password Recovery)
+         ========================================================================== -->
+    <div id="authModalOverlay" class="auth-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+        <!-- Ambient Glowing Orbs Background -->
+        <div class="auth-ambient-orb auth-orb-1" aria-hidden="true"></div>
+        <div class="auth-ambient-orb auth-orb-2" aria-hidden="true"></div>
+        <div class="auth-ambient-orb auth-orb-3" aria-hidden="true"></div>
+
+        <div class="auth-wrapper">
+            <!-- Left Branding Pane (Desktop / Tablet) -->
+            <div class="auth-brand-pane">
+                <div class="auth-brand-header">
+                    <div class="auth-logo-badge">
+                        <i data-lucide="sparkles" class="auth-logo-icon"></i>
+                    </div>
+                    <span class="auth-brand-title">Shivi<span>AI</span></span>
+                    <span class="auth-brand-tag">v2.5 Enterprise</span>
+                </div>
+
+                <div class="auth-brand-hero">
+                    <h2>Your Next-Gen Intelligent Assistant &amp; Presentation Engine</h2>
+                    <p>Experience ultra-responsive AI chat, instant professional presentation deck generation, and high-fidelity visual studios in one unified workspace.</p>
+                </div>
+
+                <div class="auth-features-list">
+                    <div class="auth-feature-item">
+                        <div class="feature-icon"><i data-lucide="presentation"></i></div>
+                        <div>
+                            <h4>Dynamic Slide Studio</h4>
+                            <p>Real-time 16:9 interactive canvas with native PPTX export.</p>
+                        </div>
+                    </div>
+                    <div class="auth-feature-item">
+                        <div class="feature-icon"><i data-lucide="cpu"></i></div>
+                        <div>
+                            <h4>Multi-Engine Intelligence</h4>
+                            <p>Deep reasoning, live web search, and structured memory.</p>
+                        </div>
+                    </div>
+                    <div class="auth-feature-item">
+                        <div class="feature-icon"><i data-lucide="shield-check"></i></div>
+                        <div>
+                            <h4>End-to-End Enterprise Privacy</h4>
+                            <p>Zero telemetry leakage, encrypted sessions &amp; local-first vault.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="auth-brand-footer">
+                    <span class="auth-security-badge">
+                        <i data-lucide="lock" style="width: 14px; height: 14px;"></i> 256-bit Encrypted Session
+                    </span>
+                    <span class="auth-copyright">&copy; 2026 ShiviAI Technologies</span>
+                </div>
+            </div>
+
+            <!-- Right Glassmorphism Auth Form Card -->
+            <div class="auth-card-pane">
+                <div class="auth-glass-card">
+                    <button type="button" class="auth-close-btn" id="closeAuthModalBtn" title="Close &amp; Continue as Guest">
+                        <i data-lucide="x"></i>
+                    </button>
+                    <!-- Tab Switcher (Sign In vs Create Account) -->
+                    <div class="auth-tab-switcher" role="tablist">
+                        <button type="button" class="auth-tab-btn active" id="authTabLogin" role="tab" aria-selected="true" aria-controls="authLoginForm">
+                            <i data-lucide="log-in" style="width: 16px; height: 16px;"></i> Sign In
+                        </button>
+                        <button type="button" class="auth-tab-btn" id="authTabSignup" role="tab" aria-selected="false" aria-controls="authSignupForm">
+                            <i data-lucide="user-plus" style="width: 16px; height: 16px;"></i> Create Account
+                        </button>
+                    </div>
+
+                    <!-- Inline Notification / Alert Banner -->
+                    <div id="authAlertBanner" class="auth-alert-banner" role="alert" style="display: none;">
+                        <i data-lucide="alert-circle" id="authAlertIcon" class="auth-alert-icon"></i>
+                        <span id="authAlertMessage">Alert message placeholder</span>
+                    </div>
+
+                    <!-- 1. LOGIN FORM -->
+                    <form id="authLoginForm" class="auth-form active" novalidate>
+                        <div class="auth-header-text">
+                            <h3 id="authTitle">Welcome back</h3>
+                            <p>Enter your credentials to access your workspace.</p>
+                        </div>
+
+                        <div class="auth-input-group">
+                            <label for="loginEmail">Email Address</label>
+                            <div class="auth-input-wrapper">
+                                <i data-lucide="mail" class="auth-input-icon"></i>
+                                <input type="email" id="loginEmail" name="email" placeholder="name@company.com" autocomplete="email" required>
+                            </div>
+                        </div>
+
+                        <div class="auth-input-group">
+                            <div class="auth-label-row">
+                                <label for="loginPassword">Password</label>
+                                <button type="button" class="auth-link-btn" id="btnForgotPass">Forgot Password?</button>
+                            </div>
+                            <div class="auth-input-wrapper">
+                                <i data-lucide="key" class="auth-input-icon"></i>
+                                <input type="password" id="loginPassword" name="password" placeholder="••••••••••••" autocomplete="current-password" required>
+                                <button type="button" class="auth-eye-btn" id="toggleLoginPassBtn" aria-label="Toggle password visibility" tabindex="-1">
+                                    <i data-lucide="eye" id="toggleLoginPassIcon"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="auth-options-row">
+                            <label class="auth-checkbox-label">
+                                <input type="checkbox" id="loginRememberMe" checked>
+                                <span class="custom-checkbox"></span>
+                                <span>Remember me on this device</span>
+                            </label>
+                        </div>
+
+                        <button type="submit" class="btn-auth-gradient" id="btnAuthLoginSubmit">
+                            <span class="btn-text">Sign In to ShiviAI</span>
+                            <span class="btn-spinner" aria-hidden="true"></span>
+                            <i data-lucide="arrow-right" class="btn-icon"></i>
+                        </button>
+
+                        <!-- One-Click Demo Account Quick Fill Button -->
+                        <div class="auth-demo-shortcut">
+                            <button type="button" class="btn-demo-fill" id="btnDemoFill">
+                                <i data-lucide="zap" style="width: 14px; height: 14px; color: #06B6D4;"></i>
+                                <span>Quick Fill Demo Account (demo@shiviai.com)</span>
+                            </button>
+                        </div>
+
+                        <div class="auth-divider">
+                            <span>or continue with</span>
+                        </div>
+
+                        <div class="auth-social-grid">
+                            <button type="button" class="btn-social-auth" id="btnGoogleAuth">
+                                <svg class="social-icon" viewBox="0 0 24 24" width="18" height="18">
+                                    <path fill="#EA4335" d="M12 5c1.6 0 3 .6 4.1 1.7l3.1-3.1C17.3 1.8 14.8 1 12 1 7.5 1 3.7 3.6 1.9 7.3l3.7 2.9C6.5 7.4 9 5 12 5z"/>
+                                    <path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.7-.2-2.3H12v4.6h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5.1 3.7-8.9z"/>
+                                    <path fill="#FBBC05" d="M5.6 14.8c-.2-.7-.4-1.5-.4-2.8 0-1.3.2-2.1.4-2.8L1.9 6.3C.7 8.7 0 10.3 0 12s.7 3.3 1.9 5.7l3.7-2.9z"/>
+                                    <path fill="#34A853" d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3 0-5.5-2.4-6.4-5.2L1.9 16C3.7 19.7 7.5 23 12 23z"/>
+                                </svg>
+                                <span>Google</span>
+                            </button>
+                            <button type="button" class="btn-social-auth" id="btnGithubAuth">
+                                <svg class="social-icon" viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                                    <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/>
+                                </svg>
+                                <span>GitHub</span>
+                            </button>
+                        </div>
+                    </form>
+
+                    <!-- 2. SIGNUP FORM -->
+                    <form id="authSignupForm" class="auth-form" novalidate style="display: none;">
+                        <div class="auth-header-text">
+                            <h3>Create your account</h3>
+                            <p>Unlock state-of-the-art AI generation and full presentation studio access.</p>
+                        </div>
+
+                        <div class="auth-input-group">
+                            <label for="signupName">Full Name</label>
+                            <div class="auth-input-wrapper">
+                                <i data-lucide="user" class="auth-input-icon"></i>
+                                <input type="text" id="signupName" name="name" placeholder="Alex Morgan" autocomplete="name" required>
+                            </div>
+                        </div>
+
+                        <div class="auth-input-group">
+                            <label for="signupEmail">Work or Personal Email</label>
+                            <div class="auth-input-wrapper">
+                                <i data-lucide="mail" class="auth-input-icon"></i>
+                                <input type="email" id="signupEmail" name="email" placeholder="alex@company.com" autocomplete="email" required>
+                            </div>
+                        </div>
+
+                        <div class="auth-input-group">
+                            <label for="signupPassword">Password</label>
+                            <div class="auth-input-wrapper">
+                                <i data-lucide="key" class="auth-input-icon"></i>
+                                <input type="password" id="signupPassword" name="password" placeholder="At least 8 characters" autocomplete="new-password" required>
+                                <button type="button" class="auth-eye-btn" id="toggleSignupPassBtn" aria-label="Toggle password visibility" tabindex="-1">
+                                    <i data-lucide="eye" id="toggleSignupPassIcon"></i>
+                                </button>
+                            </div>
+
+                            <!-- Interactive Password Strength Indicator -->
+                            <div class="pass-strength-container" id="passStrengthContainer">
+                                <div class="pass-strength-bars">
+                                    <span class="pass-bar" id="passBar1"></span>
+                                    <span class="pass-bar" id="passBar2"></span>
+                                    <span class="pass-bar" id="passBar3"></span>
+                                    <span class="pass-bar" id="passBar4"></span>
+                                </div>
+                                <div class="pass-strength-label">
+                                    <span>Strength: </span>
+                                    <strong id="passStrengthText">Too weak</strong>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="auth-input-group">
+                            <label for="signupConfirmPassword">Confirm Password</label>
+                            <div class="auth-input-wrapper">
+                                <i data-lucide="shield-check" class="auth-input-icon"></i>
+                                <input type="password" id="signupConfirmPassword" name="confirmPassword" placeholder="Re-type password" autocomplete="new-password" required>
+                            </div>
+                        </div>
+
+                        <div class="auth-options-row">
+                            <label class="auth-checkbox-label">
+                                <input type="checkbox" id="signupTermsAgree" checked required>
+                                <span class="custom-checkbox"></span>
+                                <span>I agree to ShiviAI Terms &amp; Privacy Policy</span>
+                            </label>
+                        </div>
+
+                        <button type="submit" class="btn-auth-gradient" id="btnAuthSignupSubmit">
+                            <span class="btn-text">Create Free Account</span>
+                            <span class="btn-spinner" aria-hidden="true"></span>
+                            <i data-lucide="sparkles" class="btn-icon"></i>
+                        </button>
+                    </form>
+
+                    <!-- 3. FORGOT PASSWORD FORM -->
+                    <form id="authForgotForm" class="auth-form" novalidate style="display: none;">
+                        <div class="auth-header-text">
+                            <h3>Reset your password</h3>
+                            <p>Enter your account email and we'll send you an instant reset link.</p>
+                        </div>
+
+                        <div class="auth-input-group">
+                            <label for="forgotEmail">Email Address</label>
+                            <div class="auth-input-wrapper">
+                                <i data-lucide="mail" class="auth-input-icon"></i>
+                                <input type="email" id="forgotEmail" name="email" placeholder="alex@company.com" required>
+                            </div>
+                        </div>
+
+                        <button type="submit" class="btn-auth-gradient" id="btnAuthForgotSubmit">
+                            <span class="btn-text">Send Reset Link</span>
+                            <span class="btn-spinner" aria-hidden="true"></span>
+                            <i data-lucide="send" class="btn-icon"></i>
+                        </button>
+
+                        <div class="auth-back-row">
+                            <button type="button" class="auth-link-btn" id="btnBackToLogin">
+                                <i data-lucide="arrow-left" style="width: 14px; height: 14px;"></i> Back to Sign In
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==========================================================================
+         ShiviAI Account Chooser Prompt Modal (Google & GitHub prompt=select_account)
+         ========================================================================== -->
+    <div id="accountChooserModal" class="account-chooser-overlay" role="dialog" aria-modal="true" aria-labelledby="chooserTitle" style="display: none;">
+        <div class="account-chooser-card">
+            <div class="account-chooser-header">
+                <div class="chooser-brand-badge" id="chooserBrandBadge">
+                    <svg class="chooser-brand-icon" id="chooserBrandSvg" viewBox="0 0 24 24" width="24" height="24">
+                        <path fill="#EA4335" d="M12 5c1.6 0 3 .6 4.1 1.7l3.1-3.1C17.3 1.8 14.8 1 12 1 7.5 1 3.7 3.6 1.9 7.3l3.7 2.9C6.5 7.4 9 5 12 5z"/>
+                        <path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.7-.2-2.3H12v4.6h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5.1 3.7-8.9z"/>
+                        <path fill="#FBBC05" d="M5.6 14.8c-.2-.7-.4-1.5-.4-2.8 0-1.3.2-2.1.4-2.8L1.9 6.3C.7 8.7 0 10.3 0 12s.7 3.3 1.9 5.7l3.7-2.9z"/>
+                        <path fill="#34A853" d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3 0-5.5-2.4-6.4-5.2L1.9 16C3.7 19.7 7.5 23 12 23z"/>
+                    </svg>
+                </div>
+                <div class="chooser-titles">
+                    <h3 id="chooserTitle">Choose an account</h3>
+                    <p id="chooserSubtitle">to continue to <span class="gradient-text">ShiviAI</span></p>
+                </div>
+                <button type="button" class="chooser-close-btn" id="closeChooserModalBtn" title="Back to Sign In">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+
+            <div class="chooser-prompt-pill" id="chooserPromptPill">
+                <i data-lucide="shield-check" style="width: 14px; height: 14px;"></i>
+                <span id="chooserPromptText">Account Chooser Active &bull; prompt=select_account</span>
+            </div>
+
+            <!-- Quick Account Selector Choices -->
+            <div class="chooser-accounts-section">
+                <div class="chooser-section-label">Select a saved or suggested account:</div>
+                <div class="chooser-accounts-list" id="chooserAccountsList">
+                    <!-- Dynamic Account Items Injected via JS -->
+                </div>
+            </div>
+
+            <div class="chooser-divider">
+                <span>or use another account</span>
+            </div>
+
+            <!-- Custom Account Entry Form -->
+            <form id="chooserCustomForm" class="chooser-form" novalidate>
+                <div class="chooser-input-group">
+                    <label for="chooserFullName" id="chooserNameLabel">Display Name</label>
+                    <div class="chooser-input-wrapper">
+                        <i data-lucide="user" class="chooser-input-icon"></i>
+                        <input type="text" id="chooserFullName" placeholder="e.g. Shivansh Sharma" required>
+                    </div>
+                </div>
+
+                <div class="chooser-input-group">
+                    <label for="chooserAccountIdentifier" id="chooserAccountLabel">Google Email Address</label>
+                    <div class="chooser-input-wrapper">
+                        <i data-lucide="mail" class="chooser-input-icon" id="chooserAccountIcon"></i>
+                        <input type="text" id="chooserAccountIdentifier" placeholder="name@gmail.com" required>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn-chooser-continue" id="btnChooserSubmit">
+                    <span class="btn-chooser-text" id="btnChooserText">Continue with this Account</span>
+                    <i data-lucide="arrow-right" style="width: 16px; height: 16px;"></i>
+                </button>
+            </form>
+
+            <div class="chooser-footer">
+                <button type="button" class="chooser-cancel-link" id="btnCancelChooser">
+                    <i data-lucide="arrow-left" style="width: 14px; height: 14px;"></i> Back to Sign In
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- PDF.js for Client-Side Document & PDF Parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+        if (window.pdfjsLib) {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        }
+    </script>
+
+    <!-- PptxGenJS for Instant Presentation (.pptx) Creation & Export -->
+    <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
+
+    <!-- JSZip for Client-Side PPTX & DOCX Extraction -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+    <!-- Google API & GIS for Google Drive Picker -->
+    <script async defer src="https://apis.google.com/js/api.js"></script>
+    <script async defer src="https://accounts.google.com/gsi/client"></script>
+
+    <!-- Shivi AI Brain Intelligence & Logic Core -->
+    <script src="brain.js"></script>
+    <script src="app.js"></script>
+    <script>
+        // Initialize Lucide icons on page load
+        if (window.lucide) {
+            lucide.createIcons();
+        }
+    </script>
+</body>
+</html>
