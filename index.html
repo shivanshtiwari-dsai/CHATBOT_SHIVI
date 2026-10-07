@@ -10,7 +10,8 @@
     <script>
         (function() {
             try {
-                var theme = localStorage.getItem('theme') || 
+                var theme = localStorage.getItem('shivi_selected_theme') ||
+                            localStorage.getItem('theme') || 
                             localStorage.getItem('shivi_theme') || 
                             localStorage.getItem('color-mode') || 
                             'cyberpunk';
@@ -254,37 +255,11 @@
                                 <span>Clear Screen</span>
                             </button>
 
-                            <!-- Theme Selector Dropdown Inside Popover -->
-                            <div class="theme-dropdown-container">
-                                <button type="button" class="user-popover-item" id="themeMenuBtn" title="Themes & Palette: Click to change color" onclick="window.cycleTheme(event)">
-                                    <i data-lucide="palette"></i>
-                                    <span>Themes & Palette</span>
-                                </button>
-                                <div class="theme-dropdown-menu" id="themeDropdownMenu">
-                                    <button class="theme-opt active" data-set-theme="cyberpunk">
-                                        <span class="color-preview" style="background: linear-gradient(135deg, #06b6d4, #ec4899);"></span>
-                                        Cyberpunk Dark (Default)
-                                    </button>
-                                    <button class="theme-opt" data-set-theme="emerald">
-                                        <span class="color-preview" style="background: linear-gradient(135deg, #10b981, #061412);"></span>
-                                        Deep Obsidian Emerald
-                                    </button>
-                                    <button class="theme-opt" data-set-theme="violet">
-                                        <span class="color-preview" style="background: linear-gradient(135deg, #8b5cf6, #0d0b18);"></span>
-                                        Midnight Royal Violet
-                                    </button>
-                                    <button class="theme-opt" data-set-theme="amber">
-                                        <span class="color-preview" style="background: linear-gradient(135deg, #f59e0b, #170d06);"></span>
-                                        Sunset Amber Dark
-                                    </button>
-                                    <div class="theme-dropdown-divider"></div>
-                                    <button class="theme-opt theme-opt-custom" id="openCustomThemeDropdownBtn" data-set-theme="custom">
-                                        <span class="color-preview theme-custom-preview"></span>
-                                        <span>Custom Theme Studio</span>
-                                        <span class="custom-badge-pill">Studio</span>
-                                    </button>
-                                </div>
-                            </div>
+                            <!-- Theme Selector in Profile Popover -->
+                            <button type="button" class="user-popover-item" id="themeMenuBtn" title="Themes & Palette: Choose UI Theme" onclick="window.setIsThemeModalOpen(true)">
+                                <i data-lucide="palette"></i>
+                                <span>Themes & Palette</span>
+                            </button>
 
                             <div class="user-popover-divider"></div>
                             <button type="button" class="user-popover-item" id="popoverItemSettings">
@@ -1350,6 +1325,138 @@
             <div class="modal-footer">
                 <button class="btn btn-secondary" id="resetDefaultsBtn">Reset Defaults</button>
                 <button class="btn btn-primary" id="saveSettingsBtn">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Interactive Theme Selection Modal / Palette Picker -->
+    <div class="modal-backdrop theme-palette-modal-backdrop" id="themeSelectionModal" style="display: none;">
+        <div class="modal-card theme-palette-modal-card">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <div class="modal-title-icon-brain" style="background: linear-gradient(135deg, #06b6d4, #ec4899);">
+                        <i data-lucide="palette"></i>
+                    </div>
+                    <div>
+                        <h3 class="theme-modal-heading">Select UI Theme</h3>
+                        <p class="modal-subtitle">Choose an aesthetic visual palette for your ShiviAI workspace</p>
+                    </div>
+                </div>
+                <button type="button" class="icon-btn close-modal-btn" id="closeThemeModalBtn" title="Close (Esc)">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+
+            <div class="modal-body theme-palette-modal-body">
+                <div class="theme-palette-grid" id="themePaletteGrid">
+                    <!-- 1. Cyberpunk Neon (Default) -->
+                    <div class="theme-palette-card active" data-theme-id="cyberpunk" tabindex="0" role="button">
+                        <div class="theme-card-top">
+                            <div class="theme-card-title-row">
+                                <span class="theme-card-icon">🌌</span>
+                                <h4 class="theme-card-name">Cyberpunk Neon</h4>
+                            </div>
+                            <span class="theme-active-badge"><i data-lucide="check"></i> Active</span>
+                        </div>
+                        <p class="theme-card-desc">High-contrast obsidian darkness with electric cyan and neon magenta accents.</p>
+                        <div class="theme-preview-strip" style="background: #0b0f19;">
+                            <div class="theme-preview-dots">
+                                <span class="theme-color-dot" style="background: #06b6d4;" title="Primary: Cyan (#06b6d4)"></span>
+                                <span class="theme-color-dot" style="background: #ec4899;" title="Accent: Neon Pink (#ec4899)"></span>
+                                <span class="theme-color-dot" style="background: #0b0f19; border: 1px solid #233047;" title="Background: Obsidian Dark (#0b0f19)"></span>
+                            </div>
+                            <div class="theme-preview-gradient" style="background: linear-gradient(135deg, #06b6d4, #ec4899);"></div>
+                        </div>
+                    </div>
+
+                    <!-- 2. Emerald Matrix -->
+                    <div class="theme-palette-card" data-theme-id="emerald" tabindex="0" role="button">
+                        <div class="theme-card-top">
+                            <div class="theme-card-title-row">
+                                <span class="theme-card-icon">🌿</span>
+                                <h4 class="theme-card-name">Emerald Matrix</h4>
+                            </div>
+                            <span class="theme-active-badge"><i data-lucide="check"></i> Active</span>
+                        </div>
+                        <p class="theme-card-desc">Deep cyber-botanical forest tones with luminous emerald & mint accents.</p>
+                        <div class="theme-preview-strip" style="background: #061412;">
+                            <div class="theme-preview-dots">
+                                <span class="theme-color-dot" style="background: #10b981;" title="Primary: Emerald (#10b981)"></span>
+                                <span class="theme-color-dot" style="background: #34d399;" title="Accent: Mint (#34d399)"></span>
+                                <span class="theme-color-dot" style="background: #061412; border: 1px solid #1a4d45;" title="Background: Deep Forest (#061412)"></span>
+                            </div>
+                            <div class="theme-preview-gradient" style="background: linear-gradient(135deg, #10b981, #34d399);"></div>
+                        </div>
+                    </div>
+
+                    <!-- 3. Royal Violet -->
+                    <div class="theme-palette-card" data-theme-id="violet" tabindex="0" role="button">
+                        <div class="theme-card-top">
+                            <div class="theme-card-title-row">
+                                <span class="theme-card-icon">🔮</span>
+                                <h4 class="theme-card-name">Royal Violet</h4>
+                            </div>
+                            <span class="theme-active-badge"><i data-lucide="check"></i> Active</span>
+                        </div>
+                        <p class="theme-card-desc">Mystical midnight plum aura illuminated with electric cosmic violet and purple glows.</p>
+                        <div class="theme-preview-strip" style="background: #0d0b18;">
+                            <div class="theme-preview-dots">
+                                <span class="theme-color-dot" style="background: #8b5cf6;" title="Primary: Electric Purple (#8b5cf6)"></span>
+                                <span class="theme-color-dot" style="background: #c084fc;" title="Accent: Violet (#c084fc)"></span>
+                                <span class="theme-color-dot" style="background: #0d0b18; border: 1px solid #3b2d66;" title="Background: Midnight Plum (#0d0b18)"></span>
+                            </div>
+                            <div class="theme-preview-gradient" style="background: linear-gradient(135deg, #8b5cf6, #c084fc);"></div>
+                        </div>
+                    </div>
+
+                    <!-- 4. Sunset Amber -->
+                    <div class="theme-palette-card" data-theme-id="amber" tabindex="0" role="button">
+                        <div class="theme-card-top">
+                            <div class="theme-card-title-row">
+                                <span class="theme-card-icon">🌇</span>
+                                <h4 class="theme-card-name">Sunset Amber</h4>
+                            </div>
+                            <span class="theme-active-badge"><i data-lucide="check"></i> Active</span>
+                        </div>
+                        <p class="theme-card-desc">Dark roasted espresso backdrops radiating warm golden hour amber and citrus fire.</p>
+                        <div class="theme-preview-strip" style="background: #170d06;">
+                            <div class="theme-preview-dots">
+                                <span class="theme-color-dot" style="background: #f59e0b;" title="Primary: Amber Gold (#f59e0b)"></span>
+                                <span class="theme-color-dot" style="background: #f97316;" title="Accent: Orange (#f97316)"></span>
+                                <span class="theme-color-dot" style="background: #170d06; border: 1px solid #5c3518;" title="Background: Dark Espresso (#170d06)"></span>
+                            </div>
+                            <div class="theme-preview-gradient" style="background: linear-gradient(135deg, #f59e0b, #f97316);"></div>
+                        </div>
+                    </div>
+
+                    <!-- 5. OLED Monochrome -->
+                    <div class="theme-palette-card" data-theme-id="monochrome" tabindex="0" role="button">
+                        <div class="theme-card-top">
+                            <div class="theme-card-title-row">
+                                <span class="theme-card-icon">🌑</span>
+                                <h4 class="theme-card-name">OLED Monochrome</h4>
+                            </div>
+                            <span class="theme-active-badge"><i data-lucide="check"></i> Active</span>
+                        </div>
+                        <p class="theme-card-desc">Zero light bleed with pure true black and crisp silver & slate accents.</p>
+                        <div class="theme-preview-strip" style="background: #000000; border: 1px solid #27272a;">
+                            <div class="theme-preview-dots">
+                                <span class="theme-color-dot" style="background: #e2e8f0;" title="Primary: Crisp Silver (#e2e8f0)"></span>
+                                <span class="theme-color-dot" style="background: #64748b;" title="Accent: Slate (#64748b)"></span>
+                                <span class="theme-color-dot" style="background: #000000; border: 1px solid #334155;" title="Background: Pure Black (#000000)"></span>
+                            </div>
+                            <div class="theme-preview-gradient" style="background: linear-gradient(135deg, #e2e8f0, #64748b);"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-footer theme-modal-footer">
+                <div class="theme-modal-footer-hint">
+                    <i data-lucide="sparkles"></i>
+                    <span>Theme updates live across the entire interface and persists automatically.</span>
+                </div>
+                <button type="button" class="btn btn-secondary" id="closeThemeModalFooterBtn">Close</button>
             </div>
         </div>
     </div>

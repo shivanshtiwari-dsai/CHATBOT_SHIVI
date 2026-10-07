@@ -349,6 +349,12 @@ Identity Directive:
         saveSettingsBtn: document.getElementById('saveSettingsBtn'),
         resetDefaultsBtn: document.getElementById('resetDefaultsBtn'),
 
+        // Theme Selection Palette Modal
+        themeSelectionModal: document.getElementById('themeSelectionModal'),
+        closeThemeModalBtn: document.getElementById('closeThemeModalBtn'),
+        closeThemeModalFooterBtn: document.getElementById('closeThemeModalFooterBtn'),
+        themePaletteGrid: document.getElementById('themePaletteGrid'),
+
         // Custom Theme Studio Elements
         customThemeModal: document.getElementById('customThemeModal'),
         closeCustomThemeBtn: document.getElementById('closeCustomThemeBtn'),
@@ -889,6 +895,7 @@ Identity Directive:
                     sessionStorage.setItem('shivi_auth_token', responseData.token);
                 }
 
+                await loadSavedState(userObj);
                 this.unlockApp();
                 showToast(`Welcome back, ${userObj.name}!`, 'sparkles');
                 playSound('success');
@@ -957,6 +964,7 @@ Identity Directive:
                 localStorage.setItem('shivi_auth_token', responseData.token);
                 localStorage.setItem('shivi_user', JSON.stringify(userObj));
 
+                await loadSavedState(userObj);
                 this.unlockApp();
                 showToast(`Welcome to ShiviAI, ${userObj.name}!`, 'sparkles');
                 playSound('success');
@@ -1006,6 +1014,7 @@ Identity Directive:
                 localStorage.setItem('shivi_user', JSON.stringify(userObj));
 
                 this.closeAccountChooser();
+                await loadSavedState(userObj);
                 this.unlockApp();
                 showToast(`Connected as ${userObj.name} (${userObj.provider === 'github' ? 'GitHub' : 'Google'})`, 'sparkles');
                 playSound('success');
@@ -1169,6 +1178,12 @@ Identity Directive:
                 }
             } catch (err) {}
 
+            // Immediately halt any voice audio or generation
+            try {
+                stopSpeakingVoice();
+                if (window.speechSynthesis) window.speechSynthesis.cancel();
+            } catch (vErr) {}
+
             const savedTheme = localStorage.getItem('theme') || 
                                localStorage.getItem('shivi_theme') || 
                                state.currentTheme || 
@@ -1187,7 +1202,9 @@ Identity Directive:
                 'current_user',
                 'user_data',
                 'current_session',
-                'user_session'
+                'user_session',
+                'shivi_ai_chat_data_v2',
+                'shivi_ai_chat_data_v1'
             ];
             authKeysToRemove.forEach(k => {
                 localStorage.removeItem(k);
@@ -1197,6 +1214,36 @@ Identity Directive:
             localStorage.setItem('shivi_signed_out', 'true');
             localStorage.setItem('theme', savedTheme);
             localStorage.setItem('shivi_theme', savedTheme);
+
+            // ==========================================
+            // COMPLETE IN-MEMORY CHAT STATE RESET
+            // ==========================================
+            state.sessions = [];
+            state.currentSessionId = null;
+            state.currentAttachments = [];
+            state.isGenerating = false;
+            if (state.canvas) {
+                state.canvas.isOpen = false;
+                state.canvas.isFullscreen = false;
+                state.canvas.artifact = null;
+                state.canvas.currentSlideIndex = 0;
+            }
+
+            // Wipe DOM chat elements so nothing leaks on the screen
+            if (elements.messagesList) elements.messagesList.innerHTML = '';
+            if (elements.historyList) elements.historyList.innerHTML = '';
+            if (elements.userInput) {
+                elements.userInput.value = '';
+                elements.userInput.style.height = 'auto';
+            }
+            if (elements.charCount) elements.charCount.textContent = '0/4000';
+            if (elements.welcomeHero) elements.welcomeHero.style.display = 'flex';
+            if (elements.suggestionsBar) elements.suggestionsBar.style.display = 'flex';
+            if (elements.attachmentPreviewBar) {
+                elements.attachmentPreviewBar.innerHTML = '';
+                elements.attachmentPreviewBar.style.display = 'none';
+            }
+            if (elements.typingIndicator) elements.typingIndicator.style.display = 'none';
 
             state.auth.token = null;
             state.auth.user = null;
@@ -1210,6 +1257,12 @@ Identity Directive:
             if (elements.settingsModal) {
                 elements.settingsModal.classList.remove('active');
                 elements.settingsModal.classList.remove('open');
+            }
+            if (elements.sidebar) {
+                elements.sidebar.classList.remove('open');
+            }
+            if (elements.sidebarBackdrop) {
+                elements.sidebarBackdrop.classList.remove('active');
             }
 
             // Immediately lock on login screen
@@ -1254,6 +1307,10 @@ Identity Directive:
                 state.auth.token = null;
                 state.auth.isAuthenticated = false;
                 state.auth.isLoading = false;
+                state.sessions = [];
+                state.currentSessionId = null;
+                if (elements.messagesList) elements.messagesList.innerHTML = '';
+                if (elements.historyList) elements.historyList.innerHTML = '';
                 state.activeView = 'auth';
                 this.showAuthGuard();
                 this.updateUI();
@@ -1270,6 +1327,10 @@ Identity Directive:
                 state.auth.token = null;
                 state.auth.isAuthenticated = false;
                 state.auth.isLoading = false;
+                state.sessions = [];
+                state.currentSessionId = null;
+                if (elements.messagesList) elements.messagesList.innerHTML = '';
+                if (elements.historyList) elements.historyList.innerHTML = '';
                 state.activeView = 'auth';
                 this.showAuthGuard();
                 this.updateUI();
@@ -1321,6 +1382,10 @@ Identity Directive:
                     state.auth.token = null;
                     state.auth.isAuthenticated = false;
                     state.auth.isLoading = false;
+                    state.sessions = [];
+                    state.currentSessionId = null;
+                    if (elements.messagesList) elements.messagesList.innerHTML = '';
+                    if (elements.historyList) elements.historyList.innerHTML = '';
                     state.activeView = 'auth';
                     this.showAuthGuard();
                     this.updateUI();
@@ -1338,6 +1403,10 @@ Identity Directive:
                     state.auth.token = null;
                     state.auth.isAuthenticated = false;
                     state.auth.isLoading = false;
+                    state.sessions = [];
+                    state.currentSessionId = null;
+                    if (elements.messagesList) elements.messagesList.innerHTML = '';
+                    if (elements.historyList) elements.historyList.innerHTML = '';
                     state.activeView = 'auth';
                     this.showAuthGuard();
                     this.updateUI();
@@ -1442,15 +1511,27 @@ Identity Directive:
     // ==========================================
     // LOCAL STORAGE & PERSISTENCE
     // ==========================================
-    const STORAGE_KEY = 'shivi_ai_chat_data_v2';
+    const getChatStorageKey = (user) => {
+        if (!user || (!user.email && !user.id)) return 'shivi_chats_guest';
+        // Normalize email or id to safe key
+        const identifier = (user.email || user.id || '').toLowerCase().trim();
+        return `shivi_chats_${identifier.replace(/[^a-z0-9]/g, '_')}`;
+    };
 
-    async function loadSavedState() {
+    async function loadSavedState(targetUser = null) {
         try {
-            const standaloneTheme = localStorage.getItem('shivi_theme') || localStorage.getItem('theme') || localStorage.getItem('color-mode');
-            const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem('shivi_ai_chat_data_v1');
+            const standaloneTheme = localStorage.getItem('shivi_selected_theme') || localStorage.getItem('shivi_theme') || localStorage.getItem('theme') || localStorage.getItem('color-mode');
+            const currentUser = targetUser || (state.auth && state.auth.user ? state.auth.user : null);
+            const storageKey = getChatStorageKey(currentUser);
+
+            // Clean up any old in-memory sessions before restoring
+            state.sessions = [];
+            state.currentSessionId = null;
+
+            const raw = localStorage.getItem(storageKey);
             if (raw) {
                 const data = JSON.parse(raw);
-                state.sessions = data.sessions || [];
+                state.sessions = Array.isArray(data.sessions) ? data.sessions : [];
                 state.currentSessionId = data.currentSessionId || null;
                 state.currentPersona = data.currentPersona || 'companion';
                 state.currentTheme = standaloneTheme || data.currentTheme || 'midnight';
@@ -1505,6 +1586,8 @@ Identity Directive:
             }
         } catch (e) {
             console.error('Error loading saved state:', e);
+            state.sessions = [];
+            state.currentSessionId = null;
             state.knowledgeBase = JSON.parse(JSON.stringify(DEFAULT_KNOWLEDGE_BASE));
         }
 
@@ -1537,15 +1620,21 @@ Identity Directive:
         updateVoiceIcon();
         updateBrainUIBadges();
 
-        // If no sessions, create a default session
-        if (!state.sessions.length) {
-            createNewSession();
-        } else if (!state.currentSessionId || !state.sessions.find(s => s.id === state.currentSessionId)) {
-            state.currentSessionId = state.sessions[0].id;
+        // If authenticated, ensure session exists for this user
+        if (state.auth && state.auth.isAuthenticated) {
+            if (!state.sessions.length) {
+                createNewSession();
+            } else if (!state.currentSessionId || !state.sessions.find(s => s.id === state.currentSessionId)) {
+                state.currentSessionId = state.sessions[0].id;
+            }
+            renderHistoryList();
+            renderCurrentChat();
+        } else {
+            // Unauthenticated view: keep screen completely clean
+            if (elements.messagesList) elements.messagesList.innerHTML = '';
+            if (elements.historyList) elements.historyList.innerHTML = '';
+            if (elements.welcomeHero) elements.welcomeHero.style.display = 'flex';
         }
-
-        renderHistoryList();
-        renderCurrentChat();
     }
 
     async function fetchBackendConfig() {
@@ -1636,7 +1725,9 @@ Identity Directive:
 
     function saveState() {
         try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify({
+            const currentUser = (state.auth && state.auth.user) ? state.auth.user : null;
+            const storageKey = getChatStorageKey(currentUser);
+            localStorage.setItem(storageKey, JSON.stringify({
                 sessions: state.sessions,
                 currentSessionId: state.currentSessionId,
                 currentPersona: state.currentPersona,
@@ -6037,6 +6128,7 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
 
         // 2. Persist active theme in localStorage
         try {
+            localStorage.setItem('shivi_selected_theme', themeName);
             localStorage.setItem('theme', themeName);
             localStorage.setItem('shivi_theme', themeName);
             localStorage.setItem('color-mode', themeName);
@@ -6050,19 +6142,22 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
 
         saveState();
         updateThemeUI();
+        updateThemeModalUI();
         playSound('click');
 
         const displayName = {
-            cyberpunk: 'Cyberpunk Dark (Cyan & Pink)',
-            emerald: 'Deep Obsidian Emerald',
-            violet: 'Midnight Royal Violet',
-            amber: 'Sunset Amber Dark',
-            midnight: 'Cyberpunk Dark (Default)',
-            dark: 'Cyberpunk Dark (Default)',
-            cyber: 'Cyberpunk Dark (Cyan & Pink)',
-            nebula: 'Midnight Royal Violet',
-            sapphire: 'Midnight Royal Violet',
-            sunset: 'Sunset Amber Dark',
+            cyberpunk: 'Cyberpunk Neon',
+            emerald: 'Emerald Matrix',
+            violet: 'Royal Violet',
+            amber: 'Sunset Amber',
+            sunset: 'Sunset Amber',
+            monochrome: 'OLED Monochrome',
+            oled: 'OLED Monochrome',
+            midnight: 'Cyberpunk Neon',
+            dark: 'Cyberpunk Neon',
+            cyber: 'Cyberpunk Neon',
+            nebula: 'Royal Violet',
+            sapphire: 'Royal Violet',
             custom: 'Custom Theme Studio'
         }[themeName] || themeName;
 
@@ -6075,13 +6170,69 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
             const isActive = btnTheme === state.currentTheme || 
                 (btnTheme === 'cyberpunk' && (state.currentTheme === 'dark' || state.currentTheme === 'midnight' || state.currentTheme === 'cyber')) ||
                 (btnTheme === 'violet' && (state.currentTheme === 'nebula' || state.currentTheme === 'sapphire')) ||
-                (btnTheme === 'amber' && state.currentTheme === 'sunset');
+                (btnTheme === 'amber' && state.currentTheme === 'sunset') ||
+                (btnTheme === 'monochrome' && state.currentTheme === 'oled');
             if (isActive) {
                 btn.classList.add('active');
             } else {
                 btn.classList.remove('active');
             }
         });
+        updateThemeModalUI();
+    }
+
+    function updateThemeModalUI() {
+        if (!elements.themePaletteGrid) return;
+        const current = (state.currentTheme || 'cyberpunk').toLowerCase();
+        let normalized = current;
+        if (current === 'dark' || current === 'midnight' || current === 'cyber') normalized = 'cyberpunk';
+        if (current === 'nebula' || current === 'sapphire') normalized = 'violet';
+        if (current === 'sunset') normalized = 'amber';
+        if (current === 'oled') normalized = 'monochrome';
+
+        const cards = elements.themePaletteGrid.querySelectorAll('.theme-palette-card');
+        cards.forEach(card => {
+            const themeId = card.getAttribute('data-theme-id');
+            const isActive = (themeId === normalized) || (themeId === current);
+            if (isActive) {
+                card.classList.add('active');
+            } else {
+                card.classList.remove('active');
+            }
+        });
+    }
+
+    function openThemeModal() {
+        if (!elements.themeSelectionModal) return;
+        updateThemeModalUI();
+        elements.themeSelectionModal.style.display = 'flex';
+        void elements.themeSelectionModal.offsetWidth;
+        elements.themeSelectionModal.classList.add('active', 'open');
+        if (elements.userProfileWrapper) {
+            elements.userProfileWrapper.classList.remove('open');
+        }
+        playSound('click');
+        if (window.lucide && typeof lucide.createIcons === 'function') {
+            lucide.createIcons();
+        }
+    }
+
+    function closeThemeModal() {
+        if (!elements.themeSelectionModal) return;
+        elements.themeSelectionModal.classList.remove('active', 'open');
+        setTimeout(() => {
+            if (!elements.themeSelectionModal.classList.contains('active')) {
+                elements.themeSelectionModal.style.display = 'none';
+            }
+        }, 220);
+    }
+
+    function setIsThemeModalOpen(isOpen) {
+        if (isOpen) {
+            openThemeModal();
+        } else {
+            closeThemeModal();
+        }
     }
 
     // ==========================================
@@ -6647,33 +6798,87 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
         };
 
         // Window level exposure for seamless onclick and programmatic access
-        window.openThemePalette = cycleTheme;
+        window.openThemePalette = openThemeModal;
         window.cycleTheme = cycleTheme;
-        window.setIsThemeModalOpen = (open) => open ? openCustomThemeModal() : closeCustomThemeModal();
+        window.openThemeModal = openThemeModal;
+        window.closeThemeModal = closeThemeModal;
+        window.setIsThemeModalOpen = setIsThemeModalOpen;
+        window.handleSelectTheme = setTheme;
         window.setTheme = setTheme;
 
-        // Theme Menu Button in Profile Dropdown: Cycles theme directly on click
+        // Theme Menu Button in Profile Dropdown: Opens Theme Selection Modal
         if (elements.themeMenuBtn) {
             elements.themeMenuBtn.addEventListener('click', (e) => {
-                cycleTheme(e);
+                if (e) {
+                    if (typeof e.preventDefault === 'function') e.preventDefault();
+                    if (typeof e.stopPropagation === 'function') e.stopPropagation();
+                }
+                openThemeModal();
             });
         }
 
-        if (elements.themeDropdownMenu) {
-            document.addEventListener('click', () => {
-                elements.themeDropdownMenu.classList.remove('open');
+        // Theme Palette Grid Card Selection
+        if (elements.themePaletteGrid) {
+            elements.themePaletteGrid.addEventListener('click', (e) => {
+                const card = e.target.closest('.theme-palette-card');
+                if (!card) return;
+                const themeId = card.getAttribute('data-theme-id');
+                if (themeId) {
+                    setTheme(themeId);
+                }
+            });
+
+            elements.themePaletteGrid.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    const card = e.target.closest('.theme-palette-card');
+                    if (card) {
+                        e.preventDefault();
+                        const themeId = card.getAttribute('data-theme-id');
+                        if (themeId) setTheme(themeId);
+                    }
+                }
             });
         }
 
-        // Sidebar Theme Switcher Button
+        // Close Theme Modal Triggers
+        if (elements.closeThemeModalBtn) {
+            elements.closeThemeModalBtn.addEventListener('click', closeThemeModal);
+        }
+        if (elements.closeThemeModalFooterBtn) {
+            elements.closeThemeModalFooterBtn.addEventListener('click', closeThemeModal);
+        }
+
+        // Backdrop click to close Theme Selection Modal
+        if (elements.themeSelectionModal) {
+            elements.themeSelectionModal.addEventListener('click', (e) => {
+                if (e.target === elements.themeSelectionModal) {
+                    closeThemeModal();
+                }
+            });
+        }
+
+        // Global Escape key listener to close Theme Modal
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                if (elements.themeSelectionModal && elements.themeSelectionModal.classList.contains('active')) {
+                    closeThemeModal();
+                }
+            }
+        });
+
+        // Sidebar Theme Switcher Button: Opens Theme Modal
         const sidebarThemeBtn = document.getElementById('sidebarThemeBtn');
         if (sidebarThemeBtn) {
             sidebarThemeBtn.addEventListener('click', (e) => {
-                cycleTheme(e);
+                if (e) {
+                    if (typeof e.preventDefault === 'function') e.preventDefault();
+                    if (typeof e.stopPropagation === 'function') e.stopPropagation();
+                }
+                openThemeModal();
             });
         }
 
-        // Theme Selection Items
+        // Theme Selection Items (legacy dropdown support if present)
         document.querySelectorAll('.theme-opt').forEach(btn => {
             btn.addEventListener('click', () => {
                 const theme = btn.getAttribute('data-set-theme');
@@ -6682,7 +6887,6 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                 } else {
                     setTheme(theme);
                 }
-                if (elements.themeDropdownMenu) elements.themeDropdownMenu.classList.remove('open');
             });
         });
 
@@ -8076,7 +8280,7 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
             }
             const themeBtn = e.target.closest('#themeMenuBtn, #sidebarThemeBtn');
             if (themeBtn) {
-                cycleTheme(e);
+                openThemeModal();
             }
         });
 
@@ -8110,7 +8314,16 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
 
             // Restore user authentication session & saved application state
             await Auth.checkSession();
-            await loadSavedState();
+            if (state.auth && state.auth.isAuthenticated && state.auth.user) {
+                await loadSavedState(state.auth.user);
+            } else {
+                state.sessions = [];
+                state.currentSessionId = null;
+                if (elements.messagesList) elements.messagesList.innerHTML = '';
+                if (elements.historyList) elements.historyList.innerHTML = '';
+                if (elements.welcomeHero) elements.welcomeHero.style.display = 'flex';
+                await loadSavedState(null);
+            }
         } catch (err) {
             console.error('ShiviAI initialization caught an error:', err);
         }
