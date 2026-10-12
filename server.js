@@ -247,7 +247,7 @@ function sendJson(res, statusCode, data) {
 // MULTI-PROVIDER AI CALLERS
 // ==========================================
 
-async function callGemini(apiKey, model, systemPrompt, userMessage, history = []) {
+async function callGemini(apiKey, model, systemPrompt, userMessage, history = [], options = {}) {
     const targetModel = model || 'gemini-1.5-flash';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${apiKey}`;
 
@@ -271,8 +271,8 @@ async function callGemini(apiKey, model, systemPrompt, userMessage, history = []
     const payload = {
         contents: contents,
         generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 2500
+            temperature: options.temperature !== undefined ? options.temperature : 0.7,
+            maxOutputTokens: options.max_tokens || 8192
         }
     };
 
@@ -359,7 +359,7 @@ async function callGroq(apiKey, model, systemPrompt, userMessage, history = [], 
     return answer;
 }
 
-async function callOpenAI(apiKey, model, systemPrompt, userMessage, history = []) {
+async function callOpenAI(apiKey, model, systemPrompt, userMessage, history = [], options = {}) {
     const targetModel = model || 'gpt-4o-mini';
     const url = 'https://api.openai.com/v1/chat/completions';
 
@@ -390,8 +390,8 @@ async function callOpenAI(apiKey, model, systemPrompt, userMessage, history = []
         body: JSON.stringify({
             model: targetModel,
             messages: messages,
-            temperature: 0.7,
-            max_tokens: 2500
+            temperature: options.temperature !== undefined ? options.temperature : 0.7,
+            max_tokens: options.max_tokens || 8192
         })
     });
 
@@ -408,7 +408,7 @@ async function callOpenAI(apiKey, model, systemPrompt, userMessage, history = []
     return answer;
 }
 
-async function callOpenRouter(apiKey, model, systemPrompt, userMessage, history = []) {
+async function callOpenRouter(apiKey, model, systemPrompt, userMessage, history = [], options = {}) {
     const targetModel = model || 'google/gemini-2.0-flash-exp:free';
     const url = 'https://openrouter.ai/api/v1/chat/completions';
 
@@ -445,8 +445,8 @@ async function callOpenRouter(apiKey, model, systemPrompt, userMessage, history 
         body: JSON.stringify({
             model: targetModel,
             messages: messages,
-            temperature: 0.7,
-            max_tokens: 2500
+            temperature: options.temperature !== undefined ? options.temperature : 0.7,
+            max_tokens: options.max_tokens || 8192
         })
     });
 
@@ -545,516 +545,754 @@ async function callImageGenerator(provider, apiKey, prompt, options = {}) {
 // PRESENTATION (.PPTX) GENERATOR & DECK BUILDER
 // ==========================================
 
-function normalizePresentationDeck(rawDeck, topic = 'Executive Keynote', fallbackCount = 6) {
-    if (!rawDeck || typeof rawDeck !== 'object') {
-        return generateRichFallbackDeck(topic, fallbackCount);
+function hashCode(str) {
+    let hash = 0;
+    const s = String(str || '');
+    for (let i = 0; i < s.length; i++) {
+        hash = (hash << 5) - hash + s.charCodeAt(i);
+        hash |= 0;
+    }
+    return hash;
+}
+
+function buildContextualSlideImageUrl(slide, topic, index) {
+    const keySubject = String(slide.title || slide.slide_title || '').replace(/[^a-zA-Z0-9 ]/g, '').trim();
+    let specificContext = String(slide.image_prompt || slide.visual_description || slide.image_search_query || `${topic} ${keySubject}`).trim();
+    // Ban generic abstract or surreal buzzwords so photos remain strictly contextual
+    specificContext = specificContext.replace(/\b(abstract|surreal|geometric shapes|neon glow|digital wave|glowing swirls|3D data visualization|hologram)\b/gi, '').trim();
+    if (!specificContext) specificContext = `${topic} ${keySubject}`;
+
+    // Enforce realistic, documentary, or technical photography style matching the domain
+    const enhancedPrompt = `${specificContext}, high resolution documentary photography, editorial photo, realistic lighting, 4k, hyper-detailed, clean sharp focus, authentic context`;
+
+    // Generate deterministic seed based on topic and slide index so images stay consistent
+    const seed = Math.abs(hashCode(`${topic}_slide_${index}`));
+
+    return `https://image.pollinations.ai/prompt/${encodeURIComponent(enhancedPrompt)}?width=900&height=550&nologo=true&seed=${seed}`;
+}
+
+function repairTruncatedJson(jsonStr) {
+    if (!jsonStr || typeof jsonStr !== 'string') return null;
+    let text = jsonStr.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+    try {
+        return JSON.parse(text);
+    } catch (e) {
+        // Continue to salvage partial JSON
     }
 
-    const cleanTopic = String(topic || 'Topic Analysis').trim();
-    const deckTitle = String(
-        rawDeck.deck_title || rawDeck.title || (cleanTopic ? `${cleanTopic}: Deep Keynote` : 'Keynote Presentation')
-    ).trim();
+    const slidesIndex = text.indexOf('"slides"');
+    if (slidesIndex === -1) return null;
+
+    const lastObjectClose = text.lastIndexOf('}');
+    if (lastObjectClose > slidesIndex) {
+        let candidate = text.substring(0, lastObjectClose + 1).trim();
+        if (candidate.endsWith(',')) candidate = candidate.slice(0, -1).trim();
+        if (!candidate.endsWith(']')) {
+            candidate += '\n  ]';
+        }
+        if (!candidate.endsWith('}')) {
+            candidate += '\n}';
+        }
+        try {
+            return JSON.parse(candidate);
+        } catch (e) {
+            console.warn('[Truncated JSON Recovery Failed]:', e.message);
+        }
+    }
+    return null;
+}
+
+function normalizePresentationDeck(rawDeck, topic = 'Executive Keynote', fallbackCount = 5) {
+    const targetCount = Math.min(20, Math.max(5, (fallbackCount && !isNaN(fallbackCount)) ? parseInt(fallbackCount, 10) : 5));
+
+    if (!rawDeck || typeof rawDeck !== 'object') {
+        return generateRichFallbackDeck(topic, targetCount);
+    }
+
+    const cleanTopic = String(topic || 'Strategic Initiative').trim();
+    const rawTitle = rawDeck.deck_title || rawDeck.title || (cleanTopic ? `${cleanTopic}: Executive Masterclass` : 'Keynote Presentation');
+    const deckTitle = String(rawTitle).trim().replace(/^["']|["']$/g, '');
     const theme = String(rawDeck.theme || 'dark_modern').toLowerCase();
     const rawSlides = Array.isArray(rawDeck.slides) ? rawDeck.slides : [];
 
     if (rawSlides.length === 0) {
-        return generateRichFallbackDeck(cleanTopic, fallbackCount, theme);
+        return generateRichFallbackDeck(cleanTopic, targetCount, theme);
     }
 
-    const metricDefaults = [
-        { value: 'Tier-1', caption: `Core domain standard for ${cleanTopic}` },
-        { value: '99.4%', caption: `Benchmark precision in verified ${cleanTopic} frameworks` },
-        { value: '3.4x', caption: `Throughput & comprehension multiplier for ${cleanTopic}` },
-        { value: 'Primary', caption: `Decisive structural pillar in ${cleanTopic}` },
-        { value: '< 20ms', caption: `Execution latency benchmark for ${cleanTopic}` },
-        { value: 'Verified', caption: `Empirical validation standard for ${cleanTopic}` }
-    ];
-
     const normalizedSlides = [];
+
     rawSlides.forEach((s, idx) => {
         if (!s || typeof s !== 'object') return;
+        const slideNum = idx + 1;
 
-        let rawLayout = String(s.layout || s.layout_type || '').toLowerCase();
-        let layout = 'card_grid';
-        if (idx === 0 || rawLayout === 'title') {
-            layout = 'title';
-        } else if (rawLayout === 'split_image_content' || rawLayout === 'image_split' || rawLayout === 'visual_split' || s.image_prompt || s.visual_prompt || s.image_keyword) {
-            layout = 'split_image_content';
-        } else if (rawLayout === 'metric_split' || rawLayout === 'hero_stat' || rawLayout === 'split_insight' || rawLayout === 'comparison') {
-            layout = 'metric_split';
-        } else {
-            layout = 'card_grid';
+        // 1. Layout Type
+        const rawLayout = String(s.layout_type || s.layout || '').toLowerCase();
+        const layoutType = (idx === 0 || rawLayout.includes('title')) ? 'title_hero' : 'split_image_content';
+
+        // 2. Category / Kicker
+        const defaultCat = idx === 0 ? 'EXECUTIVE BRIEFING' : (idx === 1 ? 'STRATEGIC OBJECTIVE' : (idx === rawSlides.length - 1 ? 'STRATEGIC ROADMAP' : `CORE PILLAR 0${idx}`));
+        const category = String(s.category || s.badge || defaultCat).toUpperCase().trim();
+
+        // 3. Slide Title & Subtitle
+        const rawSt = String(s.title || s.slide_title || `Strategic Vector 0${slideNum}`).trim();
+        const slideTitle = rawSt !== cleanTopic ? rawSt : `Strategic Insights: ${cleanTopic}`;
+        const subtitle = String(s.subtitle || '').trim();
+
+        // 4. Objective
+        let objective = String(s.objective || s.speaker_notes || '').trim();
+        if (!objective) {
+            if (idx === 0) objective = `Deliver an authoritative, C-level executive briefing on ${cleanTopic}.`;
+            else if (idx === 1) objective = 'Define measurable milestones and overcome existing structural bottlenecks.';
+            else if (idx === rawSlides.length - 1) objective = 'Actionable implementation roadmap and immediate leadership mandate.';
+            else objective = 'Deep-dive analysis of core mechanisms and impact drivers.';
         }
 
-        const badge = String(s.badge || (idx === 0 ? 'FOUNDATIONAL ANALYSIS' : `STRATEGIC PILLAR 0${idx + 1}`)).toUpperCase();
-        const slideTitle = String(s.slide_title || s.title || `${cleanTopic}: Core Mechanics & Insight`);
-        const subtitle = String(s.subtitle || '');
-
-        const cards = [];
-        const rawItems = Array.isArray(s.cards_or_points) ? s.cards_or_points : (Array.isArray(s.content_blocks) ? s.content_blocks : []);
-        if (rawItems.length > 0) {
-            rawItems.forEach((c, cIdx) => {
+        // 5. Bullets
+        const bullets = [];
+        if (Array.isArray(s.bullets) && s.bullets.length > 0) {
+            s.bullets.forEach(b => {
+                const bStr = String(b).trim();
+                if (bStr) bullets.push(bStr);
+            });
+        } else if (Array.isArray(s.cards_or_points) && s.cards_or_points.length > 0) {
+            s.cards_or_points.forEach(c => {
                 if (c && typeof c === 'object') {
-                    const blockTitle = String(c.title || c.label || `Core Mechanism 0${cIdx + 1}`).trim().replace(/:$/, '');
-                    const blockDesc = String(c.description || c.detail || '').trim();
-                    const tagVal = String(c.tag || c.metric || c.takeaway || c.tagline || '').trim();
-                    cards.push({
-                        title: blockTitle,
-                        label: blockTitle,
-                        description: blockDesc,
-                        detail: blockDesc,
-                        tag: tagVal || `Insight 0${cIdx + 1}`
-                    });
+                    const t = String(c.title || c.label || 'Core Vector').trim();
+                    const d = String(c.description || c.detail || '').trim();
+                    bullets.push(`**${t}**: ${d}`);
                 } else if (typeof c === 'string' && c.trim()) {
-                    const txt = c.trim();
-                    if (txt.includes(':')) {
-                        const [p1, ...rest] = txt.split(':');
-                        const h = p1.replace(/\*/g, '').trim();
-                        const d = rest.join(':').trim();
-                        cards.push({
-                            title: h,
-                            label: h,
-                            description: d,
-                            detail: d,
-                            tag: `Pillar 0${cIdx + 1}`
-                        });
-                    } else {
-                        cards.push({
-                            title: `Key Dynamic 0${cIdx + 1}`,
-                            label: `Key Dynamic 0${cIdx + 1}`,
-                            description: txt,
-                            detail: txt,
-                            tag: `Point 0${cIdx + 1}`
-                        });
-                    }
-                }
-            });
-        } else if (Array.isArray(s.bullets) && s.bullets.length > 0) {
-            s.bullets.forEach((b, bIdx) => {
-                const txt = String(b).trim();
-                if (txt.includes(':')) {
-                    const [p1, ...rest] = txt.split(':');
-                    const h = p1.replace(/\*/g, '').trim();
-                    const d = rest.join(':').trim();
-                    cards.push({
-                        title: h,
-                        label: h,
-                        description: d,
-                        detail: d,
-                        tag: `Focus 0${bIdx + 1}`
-                    });
-                } else {
-                    cards.push({
-                        title: `Key Invariant 0${bIdx + 1}`,
-                        label: `Key Invariant 0${bIdx + 1}`,
-                        description: txt,
-                        detail: txt,
-                        tag: `Insight 0${bIdx + 1}`
-                    });
+                    bullets.push(c.trim());
                 }
             });
         }
 
-        if (cards.length === 0) {
-            cards.push(
-                {
-                    title: 'Deterministic Architectural Law',
-                    label: 'Deterministic Architectural Law',
-                    description: `The foundational architecture of ${cleanTopic} relies on structured, reproducible principles that dictate how elements interact under rigorous real-world conditions.`,
-                    detail: `The foundational architecture of ${cleanTopic} relies on structured, reproducible principles that dictate how elements interact under rigorous real-world conditions.`,
-                    tag: 'Theoretical Core'
-                },
-                {
-                    title: 'Empirical Dynamic Verification',
-                    label: 'Empirical Dynamic Verification',
-                    description: `Systematic observation and domain-specific evidence verifying the practical dynamics, stability boundaries, and performance benchmarks of ${cleanTopic}.`,
-                    detail: `Systematic observation and domain-specific evidence verifying the practical dynamics, stability boundaries, and performance benchmarks of ${cleanTopic}.`,
-                    tag: 'Verified Evidence'
-                },
-                {
-                    title: 'Systemic Operational Nuance',
-                    label: 'Systemic Operational Nuance',
-                    description: `Identifies edge cases, critical interdependencies, and operational trade-offs essential for production mastery and sustained excellence in ${cleanTopic}.`,
-                    detail: `Identifies edge cases, critical interdependencies, and operational trade-offs essential for production mastery and sustained excellence in ${cleanTopic}.`,
-                    tag: 'Critical Vector'
-                }
-            );
+        if (bullets.length < 2) {
+            if (idx === 0) {
+                bullets.push(
+                    `**Strategic Intent**: High-level vision outlining the transformative roadmap, architectural requirements, and deliverables for ${cleanTopic}.`,
+                    '**Target Audience**: Designed for cross-functional stakeholders, engineering directors, and leadership demanding technical depth.',
+                    '**Presentation Standard**: Created with ShiviAI • Executive Keynote Widescreen Edition'
+                );
+            } else if (idx === 1) {
+                bullets.push(
+                    '**Operational Efficiency**: Eliminating redundant manual workflows to reduce cycle times by up to 35% through automated orchestration.',
+                    '**System Reliability**: Implementing end-to-end telemetry and verification checks to safeguard uptime under peak traffic conditions.',
+                    '**Scalable Architecture**: Decoupling services to ensure modularity and predictable throughput as data density expands.'
+                );
+            } else if (idx === rawSlides.length - 1) {
+                bullets.push(
+                    '**Phase 1 Kickoff**: Establish foundational telemetry baselines and spin up a dedicated cross-functional pilot team within 14 days.',
+                    '**Continuous Verification**: Implement automated benchmark validation gates to guarantee production SLA compliance.',
+                    '**Measurable ROI**: Accelerate capital efficiency through iterative feedback loops and compounding organizational leverage.'
+                );
+            } else {
+                bullets.push(
+                    '**Architectural Decoupling**: Partitioning execution pathways eliminates single points of failure while sustaining deterministic throughput.',
+                    '**Empirical Benchmarks**: Verified telemetry demonstrates a 3.4x compression in latency overhead across production workloads.',
+                    '**Adaptive Scaling**: Autonomous monitoring agents dynamically rebalance computational resources in response to traffic fluctuations.'
+                );
+            }
         }
 
-        const bullets = cards.map(c => c.title ? `**${c.title}:** ${c.description}` : c.description);
+        // Backward-compatible cards_or_points
+        const cardsOrPoints = bullets.map((bText, bIdx) => {
+            const match = bText.match(/^\*\*(.*?)\*\*:\s*(.*)$/);
+            let kTitle, kDesc;
+            if (match) {
+                kTitle = match[1].trim();
+                kDesc = match[2].trim();
+            } else if (bText.includes(':')) {
+                const parts = bText.split(':');
+                kTitle = parts[0].replace(/\*/g, '').trim();
+                kDesc = parts.slice(1).join(':').trim();
+            } else {
+                kTitle = `Pillar 0${bIdx + 1}`;
+                kDesc = bText;
+            }
+            return {
+                title: kTitle,
+                label: kTitle,
+                description: kDesc,
+                detail: kDesc,
+                tag: category || kTitle
+            };
+        });
 
-        let metric = s.highlight_metric || s.metric_highlight;
-        if (!metric || typeof metric !== 'object' || !metric.value) {
-            metric = metricDefaults[idx % metricDefaults.length];
-        }
+        // 6. Contextual Photo Prompt & URLs via buildContextualSlideImageUrl
+        const imgUrl = buildContextualSlideImageUrl(s, cleanTopic, slideNum);
+        const seed = Math.abs(hashCode(`${cleanTopic}_slide_${slideNum}`));
+        const fallbackUrl = `https://picsum.photos/seed/${seed}/900/550`;
+        const keySubject = String(s.title || s.slide_title || '').replace(/[^a-zA-Z0-9 ]/g, '').trim();
+        const specificContext = String(s.image_prompt || s.visual_description || s.image_search_query || `${cleanTopic} ${keySubject}`).replace(/\b(abstract|surreal|geometric shapes|neon glow|digital wave|glowing swirls|3D data visualization|hologram)\b/gi, '').trim() || `${cleanTopic} ${keySubject}`;
+        const enhancedPrompt = `${specificContext}, high resolution documentary photography, editorial photo, realistic lighting, 4k, hyper-detailed, clean sharp focus, authentic context`;
 
         let speakerNotes = String(s.speaker_notes || '').trim();
-        if (!speakerNotes || speakerNotes.length < 35) {
-            const primaryConcept = cards[0]?.title || `the core principles of ${cleanTopic}`;
-            speakerNotes = (
-                `In this section, we examine ${slideTitle}. ` +
-                `The central focal point rests on ${primaryConcept}, where empirical data and domain mechanics demonstrate consistent, measurable outcomes. ` +
-                `Presenter note: Emphasize how these structured insights directly address the foundational complexities of ${cleanTopic}.`
-            );
+        if (!speakerNotes || speakerNotes.length < 30) {
+            const primaryLead = bullets[0] ? bullets[0].split(':')[0].replace(/\*/g, '') : 'this pillar';
+            speakerNotes = `In this slide, we examine ${slideTitle}. Notice how ${primaryLead} establishes the baseline imperative for this domain. Our objective is clear: ${objective}`;
         }
 
-        const imagePrompt = String(s.image_prompt || s.visual_prompt || s.image_keyword || (layout === 'split_image_content' ? `${cleanTopic} ${slideTitle} futuristic visualization 8k` : '')).trim();
-        const imageUrl = imagePrompt
-            ? `https://image.pollinations.ai/prompt/${encodeURIComponent(imagePrompt)}?width=800&height=600&nologo=true`
-            : (s.image_url || '');
-
         normalizedSlides.push({
-            slide_number: idx + 1,
-            layout: layout,
-            layout_type: layout,
-            badge: badge,
+            slide_number: slideNum,
+            layout_type: layoutType,
+            layout: layoutType,
+            category: category,
+            badge: category,
+            title: slideTitle,
             slide_title: slideTitle,
             subtitle: subtitle,
-            image_prompt: imagePrompt,
-            visual_prompt: imagePrompt,
-            image_keyword: imagePrompt,
-            image_url: imageUrl,
-            cards_or_points: cards.slice(0, 3), // Strictly lock to 3 distinct high-depth blocks
-            bullets: bullets,
+            objective: objective,
+            bullets: bullets.slice(0, 4),
+            cards_or_points: cardsOrPoints.slice(0, 4),
+            image_search_query: s.image_search_query || `${cleanTopic} ${slideTitle}`,
+            visual_description: s.visual_description || enhancedPrompt,
+            image_prompt: enhancedPrompt,
+            image_url: imgUrl,
+            fallback_image_url: fallbackUrl,
             highlight_metric: {
-                value: String(metric.value || 'Tier-1'),
-                caption: String(metric.caption || `Benchmark metric for ${cleanTopic}`)
+                value: 'Tier-1',
+                caption: `Standard for ${cleanTopic}`
             },
             speaker_notes: speakerNotes
         });
     });
 
+    // If fewer slides were generated than requested, backfill from the rich 20-slide library
+    if (normalizedSlides.length < targetCount) {
+        const fallback = generateRichFallbackDeck(cleanTopic, targetCount, theme);
+        const backfills = fallback.slides.slice(normalizedSlides.length, targetCount);
+        backfills.forEach(bs => {
+            bs.slide_number = normalizedSlides.length + 1;
+            normalizedSlides.push(bs);
+        });
+    }
+
+    const finalSlides = normalizedSlides.slice(0, targetCount);
+    finalSlides.forEach((s, i) => { s.slide_number = i + 1; });
+
     return {
         deck_title: deckTitle,
         title: deckTitle,
-        theme: theme,
         topic: cleanTopic,
-        total_slides: normalizedSlides.length,
-        slides: normalizedSlides
+        theme: theme,
+        total_slides: finalSlides.length,
+        slides: finalSlides
     };
 }
 
 function generateRichFallbackDeck(topic, slideCount = null, theme = 'dark_modern') {
-    const count = (slideCount && slideCount > 0) ? slideCount : 6;
-    const cleanTopic = (topic || 'Subject Deep-Dive').trim();
+    const cleanTopic = (topic || 'Strategic Architecture').trim();
+    const count = Math.min(20, Math.max(5, (slideCount && !isNaN(slideCount)) ? parseInt(slideCount, 10) : 5));
+    const deckTitle = `${cleanTopic}: Executive Masterclass`;
 
-    // 100% strictly topic-grounded slide templates with zero generic buzzwords
-    const templates = [
+    // 20 Comprehensive, Domain-Grounded Slide Blueprints
+    const masterSlides = [
         {
-            layout: 'hero_stat',
-            badge: 'DOMAIN FOUNDATION',
-            slide_title: `Foundations & Governing Principles of ${cleanTopic}`,
-            subtitle: `Core mechanisms, theoretical framework, and primary drivers defining ${cleanTopic}`,
-            cards_or_points: [
-                {
-                    label: 'Primary Governing Law',
-                    detail: `The foundational architecture of ${cleanTopic} relies on structured, reproducible principles that dictate how elements interact under rigorous real-world conditions.`,
-                    tag: 'Theoretical Core'
-                },
-                {
-                    label: 'Contextual Mechanics',
-                    detail: `Examining the systemic relationships within ${cleanTopic} reveals decisive dependencies that prevent anomalous failure modes and establish operational stability.`,
-                    tag: 'System Mechanics'
-                },
-                {
-                    label: 'Evolutionary Progression',
-                    detail: `Recent empirical breakthroughs in ${cleanTopic} have fundamentally superseded earlier historical assumptions and expanded practical capabilities.`,
-                    tag: 'State-of-the-Art'
-                }
+            slide_number: 1,
+            layout_type: 'title_hero',
+            category: 'EXECUTIVE BRIEFING',
+            title: `Strategic Masterclass: ${cleanTopic}`,
+            subtitle: 'Executive architecture, operational imperatives, and market dynamics',
+            objective: `Deliver an authoritative, end-to-end strategic briefing on ${cleanTopic} for cross-functional leadership.`,
+            bullets: [
+                `**Strategic Intent**: High-level vision outlining the transformative roadmap, architectural requirements, and expected deliverables for ${cleanTopic}.`,
+                '**Target Audience**: Designed for cross-functional stakeholders, engineering directors, and executive leadership demanding technical depth.',
+                '**Presentation Standard**: Created with ShiviAI • Executive Keynote Widescreen Edition'
             ],
-            highlight_metric: { value: 'Tier-1', caption: `Authoritative domain baseline for ${cleanTopic}` },
-            speaker_notes: `Welcome everyone. Today we are conducting an authoritative deep-dive into ${cleanTopic}. Our first priority is establishing the foundational laws and mechanics that govern this subject. Pay close attention to how these core mechanisms interconnect to drive predictable, reproducible outcomes.`
+            image_search_query: `${cleanTopic} executive briefing room modern enterprise headquarters`,
+            visual_description: `Modern executive command briefing room with high-definition digital displays showcasing ${cleanTopic} operational data, cinematic corporate lighting`,
+            image_prompt: `Modern executive command briefing room with high-definition digital displays showcasing ${cleanTopic} operational data, cinematic corporate lighting, documentary photography, 4k`
         },
         {
-            layout: 'split_image_content',
-            badge: 'STRUCTURAL DYNAMICS',
-            slide_title: `Architectural Dynamics & Visualized Topology of ${cleanTopic}`,
-            subtitle: `Granular inspection of primary execution pathways and interconnected mechanics driving ${cleanTopic}`,
-            image_prompt: `${cleanTopic} technical architectural dynamics blueprint dark glowing cyan 8k`,
-            cards_or_points: [
-                {
-                    label: 'Core Primitive Architecture',
-                    detail: `Granular analysis of the primary operational structures of ${cleanTopic}, focusing on deterministic throughput, low overhead, and systemic integrity.`,
-                    tag: 'Structural Base'
-                },
-                {
-                    label: 'Coupling & Adaptive Modularity',
-                    detail: `Internal feedback pathways within ${cleanTopic} preserve coherence across decoupled modules without incurring regression or conceptual breakdown.`,
-                    tag: 'Modular Boundary'
-                }
+            slide_number: 2,
+            layout_type: 'split_image_content',
+            category: 'STRATEGIC OBJECTIVE',
+            title: 'Core Objectives & System Bottlenecks',
+            subtitle: 'Navigating primary catalysts and resolving structural bottlenecks',
+            objective: 'Define measurable milestones and overcome existing structural bottlenecks across systems.',
+            bullets: [
+                '**Operational Efficiency**: Eliminating redundant manual workflows to reduce cycle times by up to 35% through orchestrated pipelines.',
+                '**System Reliability**: Implementing end-to-end telemetry and automated verification guardrails to safeguard uptime and prevent failovers.',
+                '**Scalable Architecture**: Decoupling interdependent layers to ensure modular flexibility as compute demands and data density expand.'
             ],
-            highlight_metric: { value: '99.4%', caption: `Reliability and adherence benchmark in verified ${cleanTopic} models` },
-            speaker_notes: `As we transition into the architectural dynamics of ${cleanTopic}, this technical visual highlights the decisive execution manifold. Notice how clear component boundaries and synchronized feedback loops preserve stability.`
+            image_search_query: `${cleanTopic} mission critical operations center telemetry dashboards`,
+            visual_description: `High-tech mission control room with engineers analyzing telemetry monitors and real-time operational status of ${cleanTopic}`,
+            image_prompt: `High-tech mission control room with engineers analyzing telemetry monitors and real-time operational status of ${cleanTopic}, realistic ambient lighting, documentary photography, 4k`
         },
         {
-            layout: 'split_insight',
-            badge: 'CRITICAL PERSPECTIVES',
-            slide_title: `Comparative Perspectives & Key Trade-Offs in ${cleanTopic}`,
-            subtitle: `Contrasting conventional perspectives with modern breakthroughs and critical design choices`,
-            cards_or_points: [
-                {
-                    label: 'Conventional Conventions & Bottlenecks',
-                    detail: `Historical approaches to ${cleanTopic} often encountered compounding bottlenecks, resource constraints, and latency overhead.`,
-                    tag: 'Legacy Paradigm'
-                },
-                {
-                    label: 'Contemporary Paradigms',
-                    detail: `Next-generation methodologies in ${cleanTopic} unlock higher precision, automated validation, and exponentially improved throughput.`,
-                    tag: 'Modern Breakthrough'
-                },
-                {
-                    label: 'Trade-off: Complexity vs. Determinism',
-                    detail: `Balancing structural complexity against execution reliability remains the pivotal architectural trade-off when operationalizing ${cleanTopic}.`,
-                    tag: 'Core Optimization'
-                }
+            slide_number: 3,
+            layout_type: 'split_image_content',
+            category: 'HISTORICAL EVOLUTION',
+            title: 'Evolutionary Drivers & Paradigm Trajectory',
+            subtitle: 'From legacy methodologies to autonomous, high-throughput systems',
+            objective: 'Trace generational paradigm shifts establishing modern domain standards.',
+            bullets: [
+                '**Foundational Precedents**: Early monolithic implementations established domain feasibility but suffered severe horizontal scaling friction.',
+                '**Decoupled Modernization**: Transition toward distributed micro-services eliminated single points of computational failure.',
+                '**Autonomous Convergence**: Current state-of-the-art leverages machine-speed feedback loops and predictive heuristics.'
             ],
-            highlight_metric: { value: '4.2x', caption: `Efficiency and fidelity multiplier over legacy ${cleanTopic} approaches` },
-            speaker_notes: `Every discipline advances through trade-offs. When we juxtapose legacy approaches with modern methodologies in ${cleanTopic}, the advantages are stark: lower error rates, rapid validation cycles, and four times the effective throughput.`
+            image_search_query: `${cleanTopic} technical engineering laboratory hardware evolution`,
+            visual_description: `Clean technical laboratory displaying the physical evolution of engineering hardware for ${cleanTopic}`,
+            image_prompt: `Clean technical laboratory displaying the physical evolution of engineering hardware for ${cleanTopic}, macro photography, studio lighting, hyper-detailed`
         },
         {
-            layout: 'hero_stat',
-            badge: 'EMPIRICAL EVIDENCE',
-            slide_title: `Quantified Benchmarks & Real-World Case Evidence in ${cleanTopic}`,
-            subtitle: `Empirical observations, reproducible benchmarks, and measurable impact across cohorts`,
-            cards_or_points: [
-                {
-                    label: 'Empirical Verification Trials',
-                    detail: `Controlled evaluation across diverse scenarios demonstrates that systematic integration of ${cleanTopic} consistently delivers measurable improvements.`,
-                    tag: 'Verified Evidence'
-                },
-                {
-                    label: 'Risk Mitigation & Defensibility',
-                    detail: `Rigorous adherence to validated protocols in ${cleanTopic} suppresses critical failure vectors by over 80% while establishing long-term advantages.`,
-                    tag: '80% Failure Reduction'
-                },
-                {
-                    label: 'Repeatable Operational Yield',
-                    detail: `Longitudinal tracking confirms that gains achieved through ${cleanTopic} remain stable and compounding over extended operational horizons.`,
-                    tag: 'Compounding Yield'
-                }
+            slide_number: 4,
+            layout_type: 'split_image_content',
+            category: 'SYSTEM ARCHITECTURE',
+            title: 'Core Architecture & Technical Topology',
+            subtitle: 'Underlying invariants, execution paths, and fault-tolerant topologies',
+            objective: 'Demystify the foundational mechanics driving deterministic performance in production.',
+            bullets: [
+                '**Decoupled Orchestration**: Distributed state machines isolate computational stages to maintain deterministic latency boundaries across concurrent threads.',
+                '**Autonomous Telemetry**: Continuous observability agents monitor throughput gradients and dynamically rebalance cluster workloads in real time.',
+                '**Fault Isolation**: Partitioning critical services prevents cascading node degradation and ensures resilient, non-blocking fallback mechanisms.'
             ],
-            highlight_metric: { value: '+148%', caption: `Empirical advancement across benchmark indicators for ${cleanTopic}` },
-            speaker_notes: `Turning to quantitative validation, the data supporting ${cleanTopic} is unambiguous. Across rigorous evaluation cohorts, implementations show substantial compound improvements in stability, speed, and analytical precision.`
+            image_search_query: `${cleanTopic} enterprise datacenter server corridor fiber-optic cabling`,
+            visual_description: `Enterprise datacenter server corridor with glowing cable management and high-density compute blades for ${cleanTopic}`,
+            image_prompt: `Enterprise datacenter server corridor with glowing cable management and high-density compute blades for ${cleanTopic}, realistic lighting, documentary photography, 4k`
         },
         {
-            layout: 'process_flow',
-            badge: 'PHASED ROADMAP',
-            slide_title: `Implementation Methodology & Phased Execution for ${cleanTopic}`,
-            subtitle: `Step-by-step rollout framework from baseline assessment to advanced mastery`,
-            cards_or_points: [
-                {
-                    label: 'Phase 1: Discovery & Baseline Calibration',
-                    detail: `Establishing environmental telemetry, defining evaluation parameters, and cataloging fundamental hypotheses for ${cleanTopic}.`,
-                    tag: 'Phase 01 Milestone'
-                },
-                {
-                    label: 'Phase 2: Systematic Deployment & Orchestration',
-                    detail: `Deploying core frameworks, configuring runtime parameters, and enabling cross-functional operational protocols for ${cleanTopic}.`,
-                    tag: 'Phase 02 Milestone'
-                },
-                {
-                    label: 'Phase 3: Continuous Verification & Optimization',
-                    detail: `Automating feedback loops, refining edge-case responses, and embedding continuous performance telemetry for ${cleanTopic}.`,
-                    tag: 'Phase 03 Milestone'
-                }
+            slide_number: 5,
+            layout_type: 'split_image_content',
+            category: 'HARDWARE & COMPUTE',
+            title: 'Hardware Topology & Compute Substrates',
+            subtitle: 'Provisioning resilient node capacity, bare-metal clusters, and bandwidth',
+            objective: 'Specify physical infrastructure requirements supporting production workloads.',
+            bullets: [
+                '**Compute Acceleration**: Utilizing specialized accelerator clusters to compress training and execution latency curves by over 60%.',
+                '**Memory Bandwidth**: High-throughput interconnect fabrics eliminate memory bottlenecks during intensive concurrent analytical queries.',
+                '**Thermal Management**: Precision cooling infrastructure preserves sustained peak clock speeds across dense computational chassis.'
             ],
-            highlight_metric: { value: '< 90 Days', caption: `Structured timeline to achieve comprehensive mastery in ${cleanTopic}` },
-            speaker_notes: `A sound strategy demands disciplined execution. This phased deployment translates ${cleanTopic} from conceptual model into high-impact operational reality, ensuring robust risk mitigation at every single milestone.`
+            image_search_query: `${cleanTopic} semiconductor cleanroom processor microchip inspection`,
+            visual_description: `Semiconductor cleanroom technician inspecting silicon processor wafer and compute hardware for ${cleanTopic}`,
+            image_prompt: `Semiconductor cleanroom technician inspecting silicon processor wafer and compute hardware for ${cleanTopic}, clean sharp focus, editorial photography, 4k`
         },
         {
-            layout: 'conclusion',
-            badge: 'STRATEGIC SYNTHESIS',
-            slide_title: `Synthesis, Key Recommendations & Next Horizons in ${cleanTopic}`,
-            subtitle: `Core conclusions, expert recommendations, and definitive next steps for ${cleanTopic}`,
-            cards_or_points: [
-                {
-                    label: 'Institutionalize Core Principles',
-                    detail: `Embed the definitive lessons and architectural guidelines of ${cleanTopic} into standard operating workflows and team knowledge.`,
-                    tag: 'Action 01'
-                },
-                {
-                    label: 'Target High-Impact Optimization Levers',
-                    detail: `Focus capital and intellectual resources on eliminating technical bottlenecks that impede optimal progression in ${cleanTopic}.`,
-                    tag: 'Action 02'
-                },
-                {
-                    label: 'Establish Continuous Mastery Protocols',
-                    detail: `Maintain an agile, iterative learning posture to continuously capitalize on forthcoming research and developments in ${cleanTopic}.`,
-                    tag: 'Action 03'
-                }
+            slide_number: 6,
+            layout_type: 'split_image_content',
+            category: 'DATA TOPOLOGY',
+            title: 'Data Ingestion & Event Stream Topology',
+            subtitle: 'Real-time telemetry, asynchronous brokers, and immutable ledgers',
+            objective: 'Establish high-throughput data processing pipelines with zero data loss.',
+            bullets: [
+                '**Streaming Backpressure**: Reactive event brokers dynamically throttle ingestion rates to shield downstream storage engines from spike degradation.',
+                '**Schema Enforcement**: Strict serialization contracts reject malformed payloads at the perimeter to preserve pipeline data integrity.',
+                '**Immutable Audit Logs**: Append-only transaction journals provide mathematically verifiable audit trails for compliance forensics.'
             ],
-            highlight_metric: { value: 'Validated', caption: `Actionable roadmap ready for immediate execution in ${cleanTopic}` },
-            speaker_notes: `To conclude, ${cleanTopic} represents an extraordinary opportunity for those who execute with precision. Our recommendation is to initiate Phase 1 immediately, securing early momentum and compounding domain leadership. Thank you.`
+            image_search_query: `${cleanTopic} high density fiber optic network patch bay`,
+            visual_description: `Macro documentary photograph of high-density fiber-optic network patch bay transmitting data in modern server facility`,
+            image_prompt: `Macro documentary photograph of high-density fiber-optic network patch bay transmitting data in modern server facility for ${cleanTopic}, sharp focus, authentic context`
+        },
+        {
+            slide_number: 7,
+            layout_type: 'split_image_content',
+            category: 'ALGORITHMIC FOUNDATIONS',
+            title: 'Algorithmic Models & Mathematical Invariants',
+            subtitle: 'Deterministic execution guarantees, state convergence, and optimization',
+            objective: 'Detail the algorithmic core governing deterministic decision boundaries.',
+            bullets: [
+                '**Loss Convergence**: Advanced gradient optimization algorithms ensure rapid parameter convergence while avoiding local suboptimal plateaus.',
+                '**Probabilistic Calibration**: Rigorous confidence interval scoring prevents overconfident edge-case predictions during production anomalies.',
+                '**Dynamic Tuning**: Adaptive tuning heuristics modulate learning rates dynamically to safeguard training stability.'
+            ],
+            image_search_query: `${cleanTopic} software engineers whiteboard algorithmic formulations`,
+            visual_description: `Software engineers collaborating at glass whiteboard discussing algorithmic formulas for ${cleanTopic}`,
+            image_prompt: `Software engineers collaborating at glass whiteboard discussing algorithmic formulas for ${cleanTopic}, authentic startup office, realistic depth of field, 4k`
+        },
+        {
+            slide_number: 8,
+            layout_type: 'split_image_content',
+            category: 'SECURITY & GOVERNANCE',
+            title: 'Security Posture & Cryptographic Boundaries',
+            subtitle: 'Mutual TLS, principle of least privilege, and real-time defense',
+            objective: 'Establish bulletproof perimeter defense and zero-trust authentication.',
+            bullets: [
+                '**Cryptographic Identity**: Ephemeral mutual TLS tokens authenticate inter-service requests to eliminate static credential exploitation vectors.',
+                '**Least Privilege**: Role-based access boundaries restrict compute nodes to minimum necessary dataset partitions.',
+                '**Automated Isolation**: Behavioral anomaly sentinels quarantine compromised worker pods within sub-second detection windows.'
+            ],
+            image_search_query: `${cleanTopic} cybersecurity operations center analyst console`,
+            visual_description: `Cybersecurity operations center analyst working in front of multi-monitor security consoles for ${cleanTopic}`,
+            image_prompt: `Cybersecurity operations center analyst working in front of multi-monitor security consoles for ${cleanTopic}, moody office lighting, documentary photography, 4k`
+        },
+        {
+            slide_number: 9,
+            layout_type: 'split_image_content',
+            category: 'PERFORMANCE BENCHMARKS',
+            title: 'Empirical Benchmarks & Throughput Profiles',
+            subtitle: 'Quantified latency profiles, scaling thresholds, and stress tolerances',
+            objective: 'Validate performance gains against standardized industry baseline metrics.',
+            bullets: [
+                '**Latency Compression**: Sustained p99 latency reduced from 240ms to 38ms through kernel-bypass networking and memory pooling.',
+                '**Concurrent Scaling**: Verified linear throughput scaling up to 100,000 simultaneous concurrent sessions without degradation.',
+                '**Resource Footprint**: Memory usage optimization cuts hardware compute expenditures by up to 28% across identical transaction volumes.'
+            ],
+            image_search_query: `${cleanTopic} electronics laboratory oscilloscope benchmark diagnostic`,
+            visual_description: `Electronics testing workbench with digital oscilloscopes and benchmark diagnostic instruments evaluating ${cleanTopic}`,
+            image_prompt: `Electronics testing workbench with digital oscilloscopes and benchmark diagnostic instruments evaluating ${cleanTopic}, realistic lighting, documentary photography`
+        },
+        {
+            slide_number: 10,
+            layout_type: 'split_image_content',
+            category: 'OPERATIONAL GOVERNANCE',
+            title: 'Operational Auditing & SLA Enforcement',
+            subtitle: 'Automated policy enforcement, compliance tracing, and audit resilience',
+            objective: 'Ensure continuous regulatory adherence and transparent service-level compliance.',
+            bullets: [
+                '**Telemetry Ingestion**: Granular metrics are collected across all compute nodes to generate continuous regulatory compliance evidence.',
+                '**Automated Remediation**: Rule-based remediation controllers trigger proactive node recycling prior to threshold breaches.',
+                '**Transparent Reporting**: Real-time stakeholder dashboards expose uptime SLA metrics with complete cryptographic verification.'
+            ],
+            image_search_query: `${cleanTopic} corporate boardroom compliance audit tablets`,
+            visual_description: `Corporate leadership team reviewing operational metrics and audit reports on conference table tablets for ${cleanTopic}`,
+            image_prompt: `Corporate leadership team reviewing operational metrics and audit reports on conference table tablets for ${cleanTopic}, editorial corporate photo, 4k`
+        },
+        {
+            slide_number: 11,
+            layout_type: 'split_image_content',
+            category: 'ECOSYSTEM INTEGRATION',
+            title: 'API Integrations & Interoperability Mesh',
+            subtitle: 'Decoupled contracts, cross-platform adapters, and third-party orchestration',
+            objective: 'Enable seamless interoperability with legacy enterprise environments.',
+            bullets: [
+                '**Schema Translation**: Lightweight translation adapters convert legacy protocols into modern gRPC payloads with sub-millisecond overhead.',
+                '**Circuit Breaking**: Distributed circuit breakers isolate third-party upstream outages to prevent cascade deadlocks.',
+                '**Developer Ergonomics**: Comprehensive SDK libraries and automated sandbox generation accelerate partner integration timelines.'
+            ],
+            image_search_query: `${cleanTopic} software developer desk dual monitors code`,
+            visual_description: `Software developer desk setup with dual monitors showing code and API integration schemas for ${cleanTopic}`,
+            image_prompt: `Software developer desk setup with dual monitors showing code and API integration schemas for ${cleanTopic}, natural daylight, clean sharp focus, authentic context`
+        },
+        {
+            slide_number: 12,
+            layout_type: 'split_image_content',
+            category: 'INDUSTRY VERTICALS',
+            title: 'Vertical Sector Applications & Deployment Profiles',
+            subtitle: 'Enterprise healthcare, financial, industrial, and retail operations',
+            objective: 'Showcase tailored domain adaptations across diverse market verticals.',
+            bullets: [
+                '**Financial Systems**: Algorithmic risk profiling models identify anomalous fraudulent transactions in under 12 milliseconds.',
+                '**Healthcare Diagnostics**: High-fidelity multimodal ingestion accelerates medical imaging triage without compromising clinical diagnostic rigor.',
+                '**Industrial Manufacturing**: Real-time sensor telemetry predicts mechanical component fatigue weeks prior to catastrophic failure.'
+            ],
+            image_search_query: `${cleanTopic} automated robotic factory floor industrial operations`,
+            visual_description: `Modern industrial factory floor with automated robotic manufacturing arms and monitoring screens powered by ${cleanTopic}`,
+            image_prompt: `Modern industrial factory floor with automated robotic manufacturing arms and monitoring screens powered by ${cleanTopic}, documentary photography, 4k`
+        },
+        {
+            slide_number: 13,
+            layout_type: 'split_image_content',
+            category: 'FIELD CASE STUDIES',
+            title: 'Production Case Studies & Measured Outcomes',
+            subtitle: 'Empirical deployment outcomes, migration friction, and measured gains',
+            objective: 'Analyze real-world enterprise deployments and validated return on investment.',
+            bullets: [
+                '**Enterprise Rollout**: Global financial enterprise successfully migrated 45 legacy pipelines with zero unscheduled downtime.',
+                '**Quantified Throughput**: Post-migration telemetry confirmed a 3.4x surge in transactional capacity alongside a 40% compute cost reduction.',
+                '**Operator Feedback**: Engineering teams reported a 55% decline in on-call triage alarms following automated self-healing adoption.'
+            ],
+            image_search_query: `${cleanTopic} engineering technical team project review office`,
+            visual_description: `Technical team gathered around monitor reviewing successful live production deployment for ${cleanTopic}`,
+            image_prompt: `Technical team gathered around monitor reviewing successful live production deployment for ${cleanTopic}, natural office candid photography, 4k`
+        },
+        {
+            slide_number: 14,
+            layout_type: 'split_image_content',
+            category: 'TECHNICAL CHALLENGES',
+            title: 'Architectural Bottlenecks & Critical Hazards',
+            subtitle: 'Concurrency contention, cold-start latency, and state desynchronization',
+            objective: 'Identify high-risk architectural failure modes before production scale.',
+            bullets: [
+                '**Concurrency Contention**: Shared distributed database locks can induce catastrophic cascade starvation under asymmetric traffic spikes.',
+                '**Cold-Start Latency**: Initializing heavyweight containerized model instances introduces unacceptable p99 latency spikes if unmitigated.',
+                '**State Desynchronization**: Asynchronous replication across geographically separated datacenters risks transient split-brain inconsistencies.'
+            ],
+            image_search_query: `${cleanTopic} systems engineer diagnostic laptop server aisle`,
+            visual_description: `Systems engineer with diagnostic laptop in server aisle debugging technical performance logs for ${cleanTopic}`,
+            image_prompt: `Systems engineer with diagnostic laptop in server aisle debugging technical performance logs for ${cleanTopic}, realistic lighting, documentary photography`
+        },
+        {
+            slide_number: 15,
+            layout_type: 'split_image_content',
+            category: 'RESILIENCE ENGINEERING',
+            title: 'Risk Mitigation & Disaster Recovery',
+            subtitle: 'Automated self-healing, multi-region replication, and graceful degradation',
+            objective: 'Construct defensive architectural guardrails ensuring uninterrupted business continuity.',
+            bullets: [
+                '**Warm Pooling**: Pre-warmed container instances eliminate cold-start penalties by maintaining idle headroom during predicted spike intervals.',
+                '**Chaos Testing**: Automated fault injection simulations continuously validate failover orchestrations against unannounced node terminations.',
+                '**Multi-Region Quorum**: Raft-based consensus clusters span three independent availability zones to guarantee uninterrupted quorum availability.'
+            ],
+            image_search_query: `${cleanTopic} industrial backup power generators datacenter cooling`,
+            visual_description: `Industrial redundant power and cooling backup systems at enterprise server facility for ${cleanTopic}`,
+            image_prompt: `Industrial redundant power and cooling backup systems at enterprise server facility for ${cleanTopic}, industrial documentary photography, 4k`
+        },
+        {
+            slide_number: 16,
+            layout_type: 'split_image_content',
+            category: 'CAPITAL EFFICIENCY',
+            title: 'Cost Optimization & Total Cost of Ownership',
+            subtitle: 'Unit economics, capital allocation efficiency, and infrastructure ROI',
+            objective: 'Structure sustainable infrastructure spending with predictable unit economics.',
+            bullets: [
+                '**Spot Allocation**: Dynamic spot instance harvesting reduces auxiliary compute expenses by up to 52% for fault-tolerant batch workloads.',
+                '**Storage Tiering**: Automated data lifecycle rules migrate dormant historical telemetry to cold archival storage automatically.',
+                '**Compounding ROI**: Operational leverage allows transaction volume to scale 5x with less than 20% growth in infrastructure spend.'
+            ],
+            image_search_query: `${cleanTopic} executive reviewing financial cost graphs tablet`,
+            visual_description: `Executive reviewing financial analytics and infrastructure cost graphs on modern tablet for ${cleanTopic}`,
+            image_prompt: `Executive reviewing financial analytics and infrastructure cost graphs on modern tablet for ${cleanTopic}, sharp focus, editorial photo, 4k`
+        },
+        {
+            slide_number: 17,
+            layout_type: 'split_image_content',
+            category: 'ORGANIZATIONAL MATURITY',
+            title: 'Cross-Functional Enablement & Tiger Teams',
+            subtitle: 'Engineering enablement, change management, and operational readiness',
+            objective: 'Equip internal engineering talent with requisite domain competencies.',
+            bullets: [
+                '**Tiger Team Governance**: Dedicated SWAT engineering teams lead pilot implementations and codify organizational architectural playbooks.',
+                '**Continuous Upskilling**: Structured technical workshops ensure staff engineers master distributed state management paradigms.',
+                '**Internal Platform Hub**: Self-service developer portals streamline deployment onboarding and enforce organizational best practices.'
+            ],
+            image_search_query: `${cleanTopic} engineering teams collaborative technical classroom`,
+            visual_description: `Engineering teams in modern collaborative tech classroom participating in technical training for ${cleanTopic}`,
+            image_prompt: `Engineering teams in modern collaborative tech classroom participating in technical training for ${cleanTopic}, natural lighting, candid documentary photography`
+        },
+        {
+            slide_number: 18,
+            layout_type: 'split_image_content',
+            category: 'EXECUTION TIMELINE',
+            title: 'Implementation Roadmap: Multi-Stage Horizons',
+            subtitle: 'Disciplined execution roadmap from discovery to autonomous scale',
+            objective: 'Establish a phased rollout timeline with clear accountability gates.',
+            bullets: [
+                '**Phase 1 Kickoff (Weeks 1-4)**: Audit infrastructure baselines, establish telemetry probes, and assemble a cross-functional Tiger Team.',
+                '**Phase 2 Orchestration (Weeks 5-10)**: Deploy unified pipelines into staging, execute load simulations, and conduct operator training.',
+                '**Phase 3 Production Scale (Weeks 11+)**: Greenlight enterprise rollout with automated SLA compliance tracking and executive reporting.'
+            ],
+            image_search_query: `${cleanTopic} technical project roadmap planning wall kanban`,
+            visual_description: `Technical project managers and engineers collaborating at project roadmap planning wall for ${cleanTopic}`,
+            image_prompt: `Technical project managers and engineers collaborating at project roadmap planning wall for ${cleanTopic}, realistic lighting, documentary photography, 4k`
+        },
+        {
+            slide_number: 19,
+            layout_type: 'split_image_content',
+            category: 'FUTURE HORIZON',
+            title: 'Next-Generation Horizons & Emerging Catalysts',
+            subtitle: 'Anticipated technical breakthroughs, paradigm evolution, and moats',
+            objective: 'Anticipate upcoming technological inflection points over a 3-5 year horizon.',
+            bullets: [
+                '**Autonomous Agents**: Transition from reactive pipelines toward goal-directed autonomous agents operating within strict guardrails.',
+                '**Edge Compute Convergence**: Sub-millisecond localized inference capabilities shift computation closer to physical edge telemetry sources.',
+                '**Strategic Defensibility**: Establishing proprietary operational datasets creates compounding organizational competitive advantages.'
+            ],
+            image_search_query: `${cleanTopic} scientist research laboratory next-generation computing hardware`,
+            visual_description: `Scientist in clean modern research laboratory working on next-generation computing hardware for ${cleanTopic}`,
+            image_prompt: `Scientist in clean modern research laboratory working on next-generation computing hardware for ${cleanTopic}, realistic lighting, editorial photography, 4k`
+        },
+        {
+            slide_number: 20,
+            layout_type: 'split_image_content',
+            category: 'STRATEGIC MANDATE',
+            title: 'Executive Mandate & Actionable Next Steps',
+            subtitle: 'Leadership directives, capital deployment decisions, and next steps',
+            objective: 'Deliver decisive executive takeaways and immediate organizational directives.',
+            bullets: [
+                '**Immediate Mandate**: Greenlight Phase 1 foundational audit and charter the core implementation Tiger Team within 10 business days.',
+                '**Capital Allocation**: Earmark primary infrastructure budget to upgrade high-throughput telemetry pipelines and security perimeters.',
+                '**Sustained Momentum**: Establish bi-weekly executive steering reviews to guarantee milestone adherence and unblock dependencies.'
+            ],
+            image_search_query: `${cleanTopic} executive boardroom meeting strategic agreement handshake`,
+            visual_description: `Executive boardroom meeting with corporate leaders finalizing strategic agreement for ${cleanTopic}`,
+            image_prompt: `Executive boardroom meeting with corporate leaders finalizing strategic agreement for ${cleanTopic}, cinematic corporate lighting, documentary photography, 4k`
         }
     ];
 
-    const selected = templates.slice(0, count);
-    while (selected.length < count) {
-        const idx = selected.length;
-        const clone = Object.assign({}, templates[idx % templates.length]);
-        clone.slide_title = `${cleanTopic}: Core Dimension ${idx + 1}`;
-        selected.push(clone);
+    let chosenSlides = [];
+    if (count <= 5) {
+        chosenSlides = [masterSlides[0], masterSlides[1], masterSlides[3], masterSlides[11], masterSlides[19]];
+    } else if (count >= 20) {
+        chosenSlides = masterSlides.slice(0, 20);
+    } else {
+        // Pick count - 1 content slides and finish with the final mandate slide
+        chosenSlides = masterSlides.slice(0, count - 1);
+        chosenSlides.push(masterSlides[19]);
     }
 
+    chosenSlides.forEach((s, idx) => {
+        s.slide_number = idx + 1;
+    });
+
     return normalizePresentationDeck({
-        deck_title: `${cleanTopic}: Comprehensive Keynote`,
+        deck_title: deckTitle,
+        topic: cleanTopic,
         theme: theme,
-        slides: selected
+        slides: chosenSlides
     }, cleanTopic, count);
 }
 
 async function buildPresentationDeck(topic, slideCount = null, theme = 'dark_modern', keys = {}) {
     const cleanTopic = String(topic || 'Topic Deep-Dive').trim();
-    let slideInstruction = '';
-    let countField = '';
+    const totalCount = Math.min(20, Math.max(5, (slideCount && !isNaN(slideCount)) ? parseInt(slideCount, 10) : 5));
 
-    if (slideCount && slideCount > 0) {
-        slideInstruction = `Generate exactly ${slideCount} slides strictly analyzing "${cleanTopic}".`;
-        countField = `"total_slides": ${slideCount},`;
-    } else {
-        slideInstruction = `DETERMINE THE SLIDE COUNT DYNAMICALLY based strictly on the depth and scope of "${cleanTopic}":
-- Focused overview / specific concept: 4-6 focused slides
-- In-depth guide / structured analysis / standard deck: 7-12 slides
-- Comprehensive masterclass / complex technical architecture / deep report: 13-20+ slides
-CRITICAL CONTENT RULE: "1 core concept per slide". Never cram unrelated topics onto one slide.`;
-        countField = `"total_slides": "dynamic_count",`;
+    const systemPrompt = `You are an Executive Presentation Architect and Principal AI Analyst. Your task is to generate high-caliber, C-level presentation decks in strict JSON format. Strict adherence to the requested schema, slide count, bullet depth (15-25 words per bullet with bold keyword first), and documentary realistic photography prompts on every slide is mandatory. Output ONLY valid JSON with zero markdown codeblock wrappers.`;
+
+    // Helper to query LLM providers with resilient fallback
+    async function executeLlmPrompt(currentPrompt) {
+        const providerCalls = [];
+        if (keys.gemini) {
+            providerCalls.push(() => callGemini(keys.gemini, 'gemini-1.5-flash', systemPrompt, currentPrompt, [], { max_tokens: 8192 }));
+        }
+        if (keys.groq) {
+            providerCalls.push(() => callGroq(keys.groq, 'openai/gpt-oss-120b', systemPrompt, currentPrompt, [], { max_tokens: 3500 }));
+            providerCalls.push(() => callGroq(keys.groq, 'qwen/qwen3.8-27b', systemPrompt, currentPrompt, [], { max_tokens: 3000 }));
+        }
+        if (keys.openai) {
+            providerCalls.push(() => callOpenAI(keys.openai, 'gpt-4o-mini', systemPrompt, currentPrompt, [], { max_tokens: 8192 }));
+        }
+        if (keys.openrouter) {
+            providerCalls.push(() => callOpenRouter(keys.openrouter, 'google/gemini-2.0-flash-exp:free', systemPrompt, currentPrompt, [], { max_tokens: 8192 }));
+        }
+
+        for (const callFn of providerCalls) {
+            try {
+                const responseText = await callFn();
+                if (responseText && responseText.trim()) {
+                    const parsed = repairTruncatedJson(responseText);
+                    if (parsed && Array.isArray(parsed.slides) && parsed.slides.length > 0) {
+                        return parsed;
+                    }
+                }
+            } catch (e) {
+                console.warn('[Deck Generator LLM Provider Warning]:', e.message);
+            }
+        }
+        return null;
     }
 
-    const prompt = `You are a Principal Presentation Architect, Domain Specialist, and Executive Speechwriter.
-TARGET TOPIC: "${cleanTopic}"
-TARGET AUDIENCE: Practitioners, engineers, leaders, and stakeholders demanding technical depth and authoritative, domain-grounded insight.
+    // Single Batch for totalCount <= 10
+    if (totalCount <= 10) {
+        const prompt = `You are a Principal Presentation Architect and Executive Speechwriter.
+Generate an executive presentation deck on the topic: "${cleanTopic}".
+Generate exactly ${totalCount} cohesive, highly-structured slides.
 
-${slideInstruction}
+### PRESENTATION ARCHITECTURE & SLIDE ROLES:
+1. Slide 1 (Title Slide):
+   - layout_type: "title_hero"
+   - category: "EXECUTIVE BRIEFING"
+   - title: Clean compelling presentation title
+   - subtitle: Clear, contextual 1-line subtitle explaining the scope
+   - objective: High-level goal of this presentation
+   - bullets: 2-3 strategic focus points (e.g. "**Strategic Intent**: ...", "**Target Audience**: ...", "**Presentation Standard**: Created with ShiviAI • Executive Keynote Widescreen Edition")
+   - image_search_query: Specific realistic query for authentic operational subject
+   - visual_description: Documentary scene description of real-world subject in authentic setting
+   - image_prompt: High resolution documentary photography of authentic ${cleanTopic} in operational setting, realistic lighting, 4k, hyper-detailed, clean sharp focus
+2. Slide 2 (Objectives & Executive Summary):
+   - layout_type: "split_image_content"
+   - category: "STRATEGIC OBJECTIVE"
+   - title: Key Objectives & Core Challenges
+   - subtitle: Navigating primary catalysts and resolving structural bottlenecks
+   - objective: Define measurable milestones and overcome existing structural bottlenecks
+   - bullets: 3 to 4 detailed, high-value bullet points (15-25 words each, bold keyword first e.g. "**Operational Efficiency**: Eliminating redundant manual workflows to reduce cycle times by up to 35% through orchestrated pipelines.")
+   - image_search_query: Mission critical control room telemetry dashboards monitoring ${cleanTopic}
+   - visual_description: Operations room engineers monitoring operational telemetry metrics
+   - image_prompt: High-tech operations control room engineers monitoring telemetry metrics for ${cleanTopic}, realistic lighting, documentary photography, 4k
+3. Slides 3 to ${totalCount - 1} (Deep-Dive Analysis / Core Pillars):
+   - layout_type: "split_image_content"
+   - category: Distinct domain kicker (e.g. "SYSTEM ARCHITECTURE", "HARDWARE & COMPUTE", "DATA TOPOLOGY", "SECURITY & ZERO-TRUST", "PERFORMANCE BENCHMARKS", "ECOSYSTEM INTEGRATION", "INDUSTRY VERTICALS", "CRITICAL BOTTLENECKS", "CAPITAL EFFICIENCY")
+   - title: Distinct, insightful Heading/Title (DO NOT repeat the topic name alone, provide real conceptual conclusions)
+   - subtitle: Clear contextual 1-line subtitle
+   - objective: Core outcome or focus of this pillar
+   - bullets: 3 to 4 detailed, high-value bullet points (15-25 words each, bold keyword first)
+   - image_search_query: Specific real-world physical subject matching this slide's concept
+   - visual_description: Technical documentary description of the specific subject
+   - image_prompt: Precise realistic documentary photography depicting the exact subject of this slide, clean sharp focus, 4k
+4. Slide ${totalCount} (Strategic Roadmap & Conclusion):
+   - layout_type: "split_image_content"
+   - category: "STRATEGIC ROADMAP"
+   - title: Phased Implementation & Actionable Conclusion
+   - subtitle: Phased rollout and leadership execution mandate
+   - objective: Deliver actionable immediate takeaways and clear next steps
+   - bullets: 3 to 4 detailed actionable takeaways (15-25 words each, bold keyword first e.g. "**Phase 1 Execution**: ...", "**Risk Governance**: ...", "**Measurable ROI**: ...")
+   - image_search_query: Technical project management sprint planning session for ${cleanTopic}
+   - visual_description: Cross-functional technical leaders collaborating at project roadmap planning wall
+   - image_prompt: Technical leaders collaborating at project roadmap planning wall for ${cleanTopic}, realistic lighting, documentary photography, 4k
 
-### MANDATORY CONTENT FORMULA (ZERO FLUFF, REFUSE SURFACE-LEVEL BULLETS):
-1. 100% STRICT TOPIC GROUNDING (ZERO HALLUCINATION & ZERO OFF-TOPIC CORPORATE JARGON):
-   - Every single slide title, subtitle, concept card, explanation, metric, and speaker note MUST be strictly, deeply, and exclusively grounded in "${cleanTopic}".
-   - If "${cleanTopic}" is scientific (e.g., Photosynthesis, Quantum Physics, CRISPR, Cellular Respiration):
-     * Explain genuine chemical reactions, molecular structures, laws of thermodynamics/physics, cellular organelles, and biochemical cycles.
-   - If "${cleanTopic}" is history, literature, or arts:
-     * Focus strictly on verified historical events, dates, cultural epochs, literary devices, and documented records.
-   - If "${cleanTopic}" is computer science, AI, or software (e.g., React, Kubernetes, Rust, Transformers):
-     * Discuss exact algorithms, architectural invariants, memory models, protocol specifications, and benchmark metrics.
-   - If "${cleanTopic}" is business, economics, or marketing:
-     * Detail specific market dynamics, unit economics, regulatory mechanisms, or empirical industry data.
-   - STRICTLY FORBIDDEN: Do NOT inject generic corporate buzzwords (like "enterprise moats", "synergistic velocity", "cost avoidance") if "${cleanTopic}" is NOT about corporate finance!
-   - NO FILLERS: Ban all generic labels like "Point 1", "Overview", "Key Factors", "Introduction", or "Important Aspects".
+### STRICT RULES:
+- Output ONLY valid JSON matching schema.
+- NO REPETITIVE PLACEHOLDERS: Do NOT output the topic name as bullet points or repeat generic filler. Every bullet point must contain authentic domain-specific insight.
+- EACH BULLET MUST HAVE 15-25 WORDS and START WITH A BOLD KEYWORD: e.g. "**Keyword**: Explanation..."
+- STRICT REALISTIC CONTEXTUAL PHOTOS (NO ABSTRACT ART): Every image prompt must depict realistic tangible subjects, documentary photography, 4k, realistic lighting.
 
-2. PER-SLIDE CONTENT FORMULA (EXACTLY 3 DISTINCT HIGH-DEPTH BLOCKS):
-   - "slide_title": An insightful conclusion or thesis statement (e.g., "Decentralized Compute: Eliminating Single-Node Failure Risks", "Thylakoid Proton Gradients: Driving ATP Synthase Rotational Catalysis"). Refuse shallow generic labels like "Overview" or "Point 1".
-   - "badge": A crisp domain category in 2-4 words (e.g., "SYSTEM ARCHITECTURE", "BIOCHEMICAL MECHANICS").
-   - "subtitle": Executive summary context line.
-   - EXACTLY 3 DISTINCT CONTENT BLOCKS in "cards_or_points":
-     * "title": 3-5 word technical or strategic concept specific to "${cleanTopic}".
-     * "description": 2-3 detailed sentences explaining the mechanism, context, operational reality, or actionable insight with domain precision.
-     * "tag": Concrete metric or operational highlight (e.g., "99.98% SLA", "Cost: -35%", "ΔpH ~ 3.0", "O(log n)").
-   - "highlight_metric": Concrete domain benchmark { "value": "...", "caption": "..." }.
-   - "speaker_notes": Comprehensive narrative script for the presenter (3-5 complete sentences written as a ready-to-deliver spoken talk-track).
-
-3. SYSTEMATIC LAYOUT PRESETS:
-   - Slide 1 MUST use layout: "title".
-   - Architectural and visual slides (including Slide 2) MUST use layout: "split_image_content". For every visual slide:
-     * Include "image_prompt": An evocative, detailed prompt describing the schematic/system concept (e.g., "futuristic neural network visualization dark glowing cyan technical diagram 8k", "quantum qubit entanglement lattice blueprint neon cyan").
-     * Include exactly 2 high-depth technical content blocks in "cards_or_points".
-   - Other slides alternate between: "card_grid" (3-Card Grid preset with 3 blocks) and "metric_split" (Metric & 2 Deep Insight Blocks preset).
-
-Output STRICTLY valid raw JSON (no markdown backticks, no comments) matching this schema:
+### STRICT JSON SCHEMA:
 {
-  "deck_title": "${cleanTopic}: Executive Deep-Dive",
-  "theme": "${theme}",
-  ${countField}
+  "deck_title": "Clean Presentation Title",
+  "topic": "${cleanTopic}",
   "slides": [
     {
       "slide_number": 1,
-      "layout": "title",
-      "badge": "EXECUTIVE FOUNDATION",
-      "slide_title": "Insightful Thesis Conclusion Regarding ${cleanTopic}",
-      "subtitle": "Authoritative summary outlining the strategic and operational imperatives of ${cleanTopic}",
-      "cards_or_points": [
-        {
-          "title": "3-5 Word Technical Concept",
-          "description": "2-3 detailed sentences explaining the mechanism, context, or actionable insight with authoritative domain precision.",
-          "tag": "Key Highlight / Metric"
-        },
-        {
-          "title": "Second Deep Domain Concept",
-          "description": "2-3 detailed sentences explaining the underlying operational or architectural dynamics of this facet.",
-          "tag": "Key Highlight / Metric"
-        },
-        {
-          "title": "Third Core Mechanism Concept",
-          "description": "2-3 detailed sentences explaining critical tradeoffs, performance impacts, or future trajectory.",
-          "tag": "Key Highlight / Metric"
-        }
+      "layout_type": "title_hero",
+      "category": "EXECUTIVE BRIEFING",
+      "title": "Main Compelling Title",
+      "subtitle": "Clear, contextual 1-line subtitle explaining the scope",
+      "objective": "High-level goal of this presentation",
+      "bullets": [
+        "**Strategic Intent**: High-level vision outlining the roadmap and expected deliverables.",
+        "**Target Audience**: Designed for cross-functional stakeholders, engineers, and leadership."
       ],
-      "highlight_metric": { "value": "Benchmark", "caption": "Specific operational metric for ${cleanTopic}" },
-      "speaker_notes": "Comprehensive narrative script for the presenter detailing the overarching thesis and foundational dynamics of this slide."
-    },
-    {
-      "slide_number": 2,
-      "layout": "split_image_content",
-      "badge": "ARCHITECTURAL TOPOLOGY",
-      "slide_title": "Visualized Architectural Manifold of ${cleanTopic}",
-      "subtitle": "Modular execution pathways and interconnected mechanics",
-      "image_prompt": "${cleanTopic} detailed technical architecture visualization dark cyan glowing 8k",
-      "cards_or_points": [
-        {
-          "title": "Primary Component",
-          "description": "2-3 detailed sentences explaining the mechanism and actionable insight with domain precision.",
-          "tag": "Key Highlight / Metric"
-        },
-        {
-          "title": "Decoupled Orchestration",
-          "description": "2-3 detailed sentences explaining underlying dynamics, fault isolation, and throughput scaling.",
-          "tag": "Key Highlight / Metric"
-        }
-      ],
-      "highlight_metric": { "value": "99.4%", "caption": "Precision benchmark for ${cleanTopic}" },
-      "speaker_notes": "Examining this visual topology, we observe how decoupled execution manifolds mitigate single-point latency overhead."
+      "image_search_query": "specific realistic query",
+      "visual_description": "documentary scene description of real-world subject",
+      "image_prompt": "Documentary photography of authentic subject in realistic operational setting, 4k, clean sharp focus, realistic lighting"
     }
   ]
 }`;
 
-    const systemPrompt = "You are a world-class presentation JSON generator. Respond strictly and solely with valid JSON matching the schema. Every slide must have 3 distinct deep content blocks (title, description, tag). Ban all surface-level 1-line bullets, Point 1/Point 2 placeholders, and generic filler.";
-    let responseText = '';
+        const singleDeck = await executeLlmPrompt(prompt);
+        if (singleDeck && Array.isArray(singleDeck.slides) && singleDeck.slides.length > 0) {
+            return normalizePresentationDeck(singleDeck, cleanTopic, totalCount);
+        }
+    } else {
+        // Two-Batch Generation for totalCount > 10 (Avoids Token Truncation)
+        const batch1Count = 10;
+        const batch2Count = totalCount - batch1Count;
 
-    // Multi-provider resilient execution pipeline
-    const tryProviders = [];
-    if (keys.groq) {
-        tryProviders.push(() => callGroq(keys.groq, 'qwen/qwen3.8-27b', systemPrompt, prompt, [], { max_tokens: 4096, response_format: { type: 'json_object' } }));
-        tryProviders.push(() => callGroq(keys.groq, 'openai/gpt-oss-120b', systemPrompt, prompt, [], { max_tokens: 4096 }));
-        tryProviders.push(() => callGroq(keys.groq, 'allam-2-7b', systemPrompt, prompt, [], { max_tokens: 4096 }));
-    }
-    if (keys.gemini) {
-        tryProviders.push(() => callGemini(keys.gemini, 'gemini-1.5-flash', systemPrompt, prompt, []));
-    }
-    if (keys.openai) {
-        tryProviders.push(() => callOpenAI(keys.openai, 'gpt-4o-mini', systemPrompt, prompt, []));
-    }
-    if (keys.openrouter) {
-        tryProviders.push(() => callOpenRouter(keys.openrouter, 'google/gemini-2.0-flash-exp:free', systemPrompt, prompt, []));
-    }
+        const prompt1 = `Generate Part 1 (Slides 1 to ${batch1Count}) of an executive ${totalCount}-slide presentation deck on: "${cleanTopic}".
+Slide 1 is title_hero (EXECUTIVE BRIEFING), Slide 2 is split_image_content (STRATEGIC OBJECTIVE), Slides 3 to ${batch1Count} are deep architectural pillars.
+Every slide must have category, title, subtitle, objective, 3-4 bullets (15-25 words each, bold keyword first), image_search_query, visual_description, and image_prompt (realistic documentary photography, 4k).
+Output ONLY valid JSON: { "deck_title": "Clean Title", "topic": "${cleanTopic}", "slides": [...] }`;
 
-    for (const callFn of tryProviders) {
-        try {
-            responseText = await callFn();
-            if (responseText && responseText.trim()) break;
-        } catch (e) {
-            console.warn('[Deck Generator LLM Provider Warning]:', e.message);
+        const prompt2 = `Generate Part 2 (Slides ${batch1Count + 1} to ${totalCount}) continuing the executive presentation deck on: "${cleanTopic}".
+Slides ${batch1Count + 1} to ${totalCount - 1} are Advanced Pillars (Governance, Benchmarks, Case Studies, Bottlenecks, Mitigation, Economics).
+Slide ${totalCount} is STRATEGIC ROADMAP (Phased Implementation & Actionable Conclusion).
+Every slide must have category, title, subtitle, objective, 3-4 bullets (15-25 words each, bold keyword first), image_search_query, visual_description, and image_prompt (realistic documentary photography, 4k).
+Output ONLY valid JSON: { "deck_title": "Clean Title", "topic": "${cleanTopic}", "slides": [...] }`;
+
+        const [deckPart1, deckPart2] = await Promise.all([
+            executeLlmPrompt(prompt1),
+            executeLlmPrompt(prompt2)
+        ]);
+
+        const combinedSlides = [];
+        if (deckPart1 && Array.isArray(deckPart1.slides)) {
+            combinedSlides.push(...deckPart1.slides);
+        }
+        if (deckPart2 && Array.isArray(deckPart2.slides)) {
+            combinedSlides.push(...deckPart2.slides);
+        }
+
+        if (combinedSlides.length > 0) {
+            const mergedDeck = {
+                deck_title: (deckPart1 && deckPart1.deck_title) || `${cleanTopic}: Executive Masterclass`,
+                topic: cleanTopic,
+                theme: theme,
+                slides: combinedSlides
+            };
+            return normalizePresentationDeck(mergedDeck, cleanTopic, totalCount);
         }
     }
 
-    let deck = null;
-    if (responseText) {
-        try {
-            const cleaned = responseText.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
-            deck = JSON.parse(cleaned);
-        } catch (e) {
-            console.warn('[Presentation JSON Parse Warning]:', e.message);
-        }
-    }
-
-    return normalizePresentationDeck(deck, cleanTopic, slideCount || 6);
+    return generateRichFallbackDeck(cleanTopic, totalCount, theme);
 }
 
 async function createPptxFile(deck) {
@@ -1146,116 +1384,126 @@ async function createPptxFile(deck) {
         const contentTop = 1.95;
         const contentHeight = 4.75;
 
+
         // -------------------------------------------------------------
-        // 1. HERO STAT LAYOUT (Keynote Stat Hero + Modular Cards)
+        // 1. TITLE HERO LAYOUT (Slide 1)
         // -------------------------------------------------------------
-        if (layout === 'hero_stat') {
-            // Left Giant Stat Card
+        if (idx === 0 || layout === 'title' || layout === 'title_hero') {
+            const colW = 5.65;
+
+            // Left Column: Strategic Summary Card
             slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
-                x: 0.8, y: contentTop, w: 4.6, h: contentHeight,
+                x: 0.8, y: contentTop, w: colW, h: contentHeight,
                 fill: { color: cardBgHex },
-                line: { color: cardBorderHex, width: 1.5 },
+                line: { color: cardBorderHex, width: 1 },
                 rectRadius: 0.12
             });
 
-            slide.addText(metric.value || '+148%', {
-                x: 1.1, y: 2.3, w: 4.0, h: 1.5,
-                fontSize: 46, bold: true, color: accentHex,
-                fontFace: 'Arial', valign: 'middle'
+            const leftRuns = [];
+            const objText = s.objective || `Deliver an authoritative executive briefing on ${normalizedDeck.deck_title}.`;
+            leftRuns.push({ text: '🎯 STRATEGIC OBJECTIVE:\n', options: { bold: true, fontSize: 11.5, color: altAccentHex, fontFace: 'Arial' } });
+            leftRuns.push({ text: `${objText}\n\n`, options: { bold: false, fontSize: 11, color: bodyHex, fontFace: 'Arial' } });
+
+            const bulletsList = (s.bullets && s.bullets.length > 0) ? s.bullets : cards.map(c => `**${c.title || c.label || 'Pillar'}**: ${c.description || c.detail || ''}`);
+            bulletsList.slice(0, 3).forEach(bItem => {
+                const bStr = String(bItem).trim();
+                if (bStr.includes(':')) {
+                    const parts = bStr.split(':');
+                    const k = parts[0].replace(/\*/g, '').trim();
+                    const d = parts.slice(1).join(':').trim();
+                    leftRuns.push({ text: `✦ ${k}: `, options: { bold: true, fontSize: 11.5, color: accentHex, fontFace: 'Arial' } });
+                    leftRuns.push({ text: `${d}\n\n`, options: { bold: false, fontSize: 11, color: bodyHex, fontFace: 'Arial' } });
+                } else {
+                    leftRuns.push({ text: `✦ ${bStr}\n\n`, options: { bold: false, fontSize: 11, color: bodyHex, fontFace: 'Arial' } });
+                }
             });
 
-            slide.addText(metric.caption || 'Annualized adoption benchmark', {
-                x: 1.1, y: 3.8, w: 4.0, h: 0.9,
-                fontSize: 13, bold: true, color: titleHex,
-                fontFace: 'Arial', valign: 'top'
+            leftRuns.push({ text: 'Created with ShiviAI • Executive Keynote Widescreen Edition', options: { italic: true, fontSize: 9.5, color: subHex, fontFace: 'Arial' } });
+
+            slide.addText(leftRuns, {
+                x: 1.05, y: contentTop + 0.2, w: colW - 0.5, h: contentHeight - 0.4,
+                valign: 'top'
             });
 
-            // Divider Line
-            slide.addShape(pptx.shapes.LINE, {
-                x: 1.1, y: 4.8, w: 3.8, h: 0,
-                line: { color: cardBorderHex, width: 1 }
+            // Right column: AI Generated Visual Image
+            const imgPrompt = s.image_prompt || s.visual_prompt || `${normalizedDeck.deck_title} modern corporate executive technology`;
+            const imgUrl = s.image_url || `https://image.pollinations.ai/prompt/${encodeURIComponent(imgPrompt)}?width=800&height=600&nologo=true`;
+
+            slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
+                x: 6.85, y: contentTop, w: colW, h: contentHeight,
+                fill: { color: cardBgHex },
+                line: { color: accentHex, width: 1.2 },
+                rectRadius: 0.12
             });
 
-            slide.addText(`Empirical production metric reflecting acceleration across verified ${normalizedDeck.deck_title} frameworks.`, {
-                x: 1.1, y: 5.0, w: 4.0, h: 1.3,
-                fontSize: 10.5, color: subHex,
-                fontFace: 'Arial', valign: 'top'
-            });
-
-            // Right Column: 2 Modular Concept Cards
-            const numCards = Math.min(cards.length, 2);
-            const cardH = (contentHeight - 0.3) / 2;
-            for (let i = 0; i < numCards; i++) {
-                const cy = contentTop + i * (cardH + 0.3);
-                const c = cards[i] || { label: `Pillar ${i + 1}`, detail: 'Actionable insight point' };
-
-                slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
-                    x: 5.7, y: cy, w: 6.8, h: cardH,
-                    fill: { color: cardBgHex },
-                    line: { color: cardBorderHex, width: 1 },
-                    rectRadius: 0.12
+            try {
+                slide.addImage({
+                    path: imgUrl,
+                    x: 6.9,
+                    y: contentTop + 0.05,
+                    w: colW - 0.1,
+                    h: contentHeight - 0.45,
+                    rounding: true
                 });
-
-                // Top Accent Strip
-                slide.addShape(pptx.shapes.RECTANGLE, {
-                    x: 5.9, y: cy + 0.18, w: 1.2, h: 0.05,
-                    fill: { color: i === 0 ? accentHex : altAccentHex },
-                    line: { color: i === 0 ? accentHex : altAccentHex }
-                });
-
-                slide.addText(c.label, {
-                    x: 5.9, y: cy + 0.35, w: 6.4, h: 0.38,
-                    fontSize: 16, bold: true, color: titleHex,
-                    fontFace: 'Arial'
-                });
-
-                slide.addText(c.detail, {
-                    x: 5.9, y: cy + 0.8, w: 6.4, h: cardH - 0.95,
-                    fontSize: 12.5, color: bodyHex,
-                    fontFace: 'Arial', valign: 'top'
-                });
+            } catch (imgErr) {
+                console.warn('[PptxGenJS Server] addImage warning:', imgErr);
             }
+
+            slide.addText(`✦ AI Visual: ${imgPrompt}`, {
+                x: 6.9, y: contentTop + contentHeight - 0.38, w: colW - 0.1, h: 0.32,
+                fontSize: 9, italic: true, color: subHex,
+                fontFace: 'Arial', align: 'center', valign: 'middle'
+            });
         }
         // -------------------------------------------------------------
-        // SPLIT IMAGE & CONTENT LAYOUT (50% text cards left, 50% AI image right)
+        // 2. SPLIT IMAGE & CONTENT LAYOUT (With 3-4 Bullets & Dynamic AI Visual)
         // -------------------------------------------------------------
-        else if (layout === 'split_image_content' || s.image_prompt || s.image_url) {
+        else if (layout === 'split_image_content' || s.bullets || s.image_prompt || s.image_url) {
             const colW = 5.65;
-            const leftCards = cards.slice(0, 2);
-            const cardH = (contentHeight - 0.25) / 2;
+            const bulletsList = (s.bullets && s.bullets.length > 0) ? s.bullets : cards.map(c => `**${c.title || c.label || 'Pillar'}**: ${c.description || c.detail || ''}`);
+            const numBullets = Math.min(Math.max(bulletsList.length, 2), 4);
+            const cardGap = 0.15;
+            const cardH = (contentHeight - (cardGap * (numBullets - 1))) / numBullets;
 
-            for (let i = 0; i < leftCards.length; i++) {
-                const cy = contentTop + i * (cardH + 0.25);
-                const c = leftCards[i] || { label: `Strategic Pillar ${i + 1}`, detail: 'Actionable insight point' };
+            for (let bIdx = 0; bIdx < numBullets; bIdx++) {
+                const bStr = String(bulletsList[bIdx] || bulletsList[bulletsList.length - 1]).trim();
+                const cy = contentTop + bIdx * (cardH + cardGap);
 
                 slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
                     x: 0.8, y: cy, w: colW, h: cardH,
                     fill: { color: cardBgHex },
                     line: { color: cardBorderHex, width: 1 },
-                    rectRadius: 0.12
+                    rectRadius: 0.1
                 });
 
+                // Left Accent Strip
                 slide.addShape(pptx.shapes.RECTANGLE, {
-                    x: 1.05, y: cy + 0.18, w: 1.0, h: 0.05,
-                    fill: { color: i === 0 ? accentHex : altAccentHex },
-                    line: { color: i === 0 ? accentHex : altAccentHex }
+                    x: 0.8, y: cy + 0.08, w: 0.08, h: cardH - 0.16,
+                    fill: { color: bIdx % 2 === 0 ? accentHex : altAccentHex },
+                    line: { color: bIdx % 2 === 0 ? accentHex : altAccentHex }
                 });
 
-                slide.addText(c.title || c.label, {
-                    x: 1.05, y: cy + 0.35, w: colW - 0.5, h: 0.38,
-                    fontSize: 15, bold: true, color: titleHex,
-                    fontFace: 'Arial'
-                });
+                let keyword = `Pillar ${bIdx + 1}`;
+                let desc = bStr;
+                if (bStr.includes(':')) {
+                    const parts = bStr.split(':');
+                    keyword = parts[0].replace(/\*/g, '').trim();
+                    desc = parts.slice(1).join(':').trim();
+                }
 
-                slide.addText(c.description || c.detail, {
-                    x: 1.05, y: cy + 0.8, w: colW - 0.5, h: cardH - 0.95,
-                    fontSize: 11.5, color: bodyHex,
-                    fontFace: 'Arial', valign: 'top'
+                const bulletRuns = [
+                    { text: `✦ ${keyword}: `, options: { bold: true, fontSize: 12, color: accentHex, fontFace: 'Arial' } },
+                    { text: desc, options: { bold: false, fontSize: 11, color: bodyHex, fontFace: 'Arial' } }
+                ];
+
+                slide.addText(bulletRuns, {
+                    x: 1.05, y: cy + 0.1, w: colW - 0.35, h: cardH - 0.2,
+                    valign: 'middle'
                 });
             }
 
             // Right column: AI Generated Visual Image
-            const imgPrompt = s.image_prompt || s.visual_prompt || s.image_keyword || `${normalizedDeck.deck_title} ${slideTitle}`;
+            const imgPrompt = s.image_prompt || s.visual_prompt || `${normalizedDeck.deck_title} ${slideTitle}`;
             const imgUrl = s.image_url || `https://image.pollinations.ai/prompt/${encodeURIComponent(imgPrompt)}?width=800&height=600&nologo=true`;
 
             slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
@@ -2029,11 +2277,16 @@ if (req.method === 'POST' && pathname === '/api/chat') {
                 let slideCount = null;
                 const slideMatch = userMessage.match(/(\d+)\s*(?:slides?|slide deck)/i);
                 if (slideMatch && slideMatch[1]) {
-                    slideCount = Math.max(2, parseInt(slideMatch[1], 10));
+                    slideCount = Math.min(20, Math.max(5, parseInt(slideMatch[1], 10)));
                 }
 
                 if (isPptSlash) {
                     topic = userMessage.replace(/^\/(ppt|presentation|slides|deck)\s+/i, '').trim();
+                    topic = topic
+                        .replace(/(?:^|\s)(?:(\d+)\s*(?:slides?|slide deck)|(?:on|about|for)\s+(\d+)\s*(?:slides?|slide deck))\s*(?:on|about|for)?\s*/gi, ' ')
+                        .replace(/\s*(?:on|about|for)?\s*(\d+)\s*(?:slides?|slide deck)\s*$/gi, '')
+                        .replace(/^(?:on|about|for)\s+/i, '')
+                        .trim();
                 } else {
                     topic = userMessage
                         .replace(/(?:create|make|generate|build|draft|prepare)\s+(?:a\s+)?(?:(\d+)[ -]slide\s+)?(?:presentation|ppt|powerpoint|slide deck|slides)\s+(?:on|about|for)\s+/i, '')

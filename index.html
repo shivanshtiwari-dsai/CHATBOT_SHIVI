@@ -367,6 +367,25 @@
                 </div>
             </div>
 
+            <!-- Floating Speaking Indicator (Active when Shivi is reading aloud) -->
+            <div class="floating-speaking-indicator" id="floatingSpeakingIndicator" style="display: none;">
+                <div class="speaking-wave-visualizer">
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                    <span class="wave-bar"></span>
+                </div>
+                <div class="speaking-indicator-info">
+                    <span class="speaking-indicator-title">Shivi is reading aloud</span>
+                    <span class="speaking-indicator-subtitle">Click Mute to halt audio</span>
+                </div>
+                <button type="button" class="speaking-mute-btn" id="floatingMuteBtn" title="Stop & Mute Voice">
+                    <i data-lucide="volume-x"></i>
+                    <span>Mute</span>
+                </button>
+            </div>
+
             <!-- Action Pills (Above Input) -->
             <div class="suggestions-bar" id="suggestionsBar">
                 <button type="button" class="action-pill-btn" id="actionPillPpt" title="Create a presentation">
@@ -2196,6 +2215,9 @@
     <!-- Google API & GIS for Google Drive Picker -->
     <script async defer src="https://apis.google.com/js/api.js"></script>
     <script async defer src="https://accounts.google.com/gsi/client"></script>
+
+    <!-- Real-Time Two-Way Voice Engine -->
+    <script src="voiceService.js"></script>
 
     <!-- Shivi AI Brain Intelligence & Logic Core -->
     <script src="brain.js"></script>

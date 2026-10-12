@@ -154,7 +154,7 @@
         },
         currentFont: 'poppins',       // poppins | outfit | inter | space | jakarta
         sfxEnabled: true,
-        voiceEnabled: false,
+        voiceEnabled: (typeof window !== 'undefined' && localStorage.getItem('shivi_voice_enabled') !== null) ? localStorage.getItem('shivi_voice_enabled') === 'true' : true,
         speechRate: 1.0,
         sfxVolume: 0.5,
         brainProvider: 'builtin',    // builtin | gemini | groq | openai | openrouter
@@ -248,6 +248,8 @@ Identity Directive:
         welcomeHero: document.getElementById('welcomeHero'),
         messagesList: document.getElementById('messagesList'),
         typingIndicator: document.getElementById('typingIndicator'),
+        floatingSpeakingIndicator: document.getElementById('floatingSpeakingIndicator'),
+        floatingMuteBtn: document.getElementById('floatingMuteBtn'),
         suggestionsBar: document.getElementById('suggestionsBar'),
         actionPillPpt: document.getElementById('actionPillPpt'),
         actionPillImage: document.getElementById('actionPillImage'),
@@ -1548,7 +1550,9 @@ Identity Directive:
                 }, data.customThemeColors || {});
                 state.currentFont = data.currentFont || 'poppins';
                 state.sfxEnabled = data.sfxEnabled !== undefined ? data.sfxEnabled : true;
-                state.voiceEnabled = !!data.voiceEnabled;
+                state.voiceEnabled = (window.voiceService && window.voiceService.isVoiceEnabled !== undefined)
+                    ? window.voiceService.isVoiceEnabled
+                    : (data.voiceEnabled !== undefined ? !!data.voiceEnabled : true);
                 state.speechRate = data.speechRate || 1.0;
                 state.sfxVolume = data.sfxVolume !== undefined ? data.sfxVolume : 0.5;
                 state.brainProvider = data.brainProvider || (data.engineMode === 'customApi' ? 'gemini' : 'builtin');
@@ -2385,37 +2389,79 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
     }
 
     // ==========================================
-    // TEXT-TO-SPEECH (TTS) & VOICE READER WITH AUTO-STOP
+    // TEXT-TO-SPEECH (TTS) & REAL-TIME VOICE COMPANION
     // ==========================================
     function stopSpeakingVoice() {
-        if ('speechSynthesis' in window) {
+        if (window.voiceService) {
+            window.voiceService.stop();
+        } else if ('speechSynthesis' in window) {
             window.speechSynthesis.cancel();
         }
         state.isSpeaking = false;
-        updateSpeakingIndicatorUI();
+        updateSpeakingIndicatorUI(false, null);
     }
 
-    function updateSpeakingIndicatorUI() {
+    function updateSpeakingIndicatorUI(speaking = null, msgId = null) {
+        const isSpeaking = speaking !== null ? !!speaking : (window.voiceService ? window.voiceService.isSpeaking : state.isSpeaking);
+        state.isSpeaking = isSpeaking;
+
+        // Header Stop Button
         if (elements.stopSpeakingBtn) {
-            elements.stopSpeakingBtn.style.display = state.isSpeaking ? 'flex' : 'none';
+            elements.stopSpeakingBtn.style.display = isSpeaking ? 'inline-flex' : 'none';
+        }
+
+        // Floating Speaking Indicator in Chat
+        if (elements.floatingSpeakingIndicator) {
+            elements.floatingSpeakingIndicator.style.display = isSpeaking ? 'flex' : 'none';
+        }
+
+        // Update speaker action buttons across message cards
+        const activeMsgId = msgId || (window.voiceService ? window.voiceService.currentlySpeakingMsgId : null);
+        document.querySelectorAll('.speak-msg-btn').forEach(btn => {
+            const thisMsgId = btn.getAttribute('data-msg-id');
+            const isThisSpeaking = isSpeaking && activeMsgId && thisMsgId === activeMsgId;
+            btn.classList.toggle('speaking', !!isThisSpeaking);
+            const icon = btn.querySelector('i');
+            if (icon) {
+                icon.setAttribute('data-lucide', isThisSpeaking ? 'square' : 'volume-2');
+            }
+            const label = btn.querySelector('.speak-btn-label');
+            if (label) {
+                label.textContent = isThisSpeaking ? 'Stop' : 'Listen';
+            }
+            btn.setAttribute('title', isThisSpeaking ? 'Stop voice readout' : 'Read Aloud');
+        });
+
+        if (window.lucide) {
+            lucide.createIcons();
         }
     }
 
-    function speakText(text) {
+    function speakText(text, msgId = null) {
+        if (!text) return;
+        if (window.voiceService) {
+            window.voiceService.speak(text, () => {
+                updateSpeakingIndicatorUI(false, null);
+            }, msgId);
+            updateSpeakingIndicatorUI(true, msgId);
+            return;
+        }
+
+        // Fallback for standalone speech synthesis
         if (!('speechSynthesis' in window)) return;
         stopSpeakingVoice();
 
         const cleanSpokenText = text
-            .replace(/```[\s\S]*?```/g, 'Code snippet omitted for speech.')
+            .replace(/```[\s\S]*?```/g, 'Code snippet sent in chat.')
             .replace(/`([^`]+)`/g, '$1')
-            .replace(/[*#_>|]/g, '')
+            .replace(/[*#_>|]/g, ' ')
             .trim();
 
         if (!cleanSpokenText) return;
 
         const utterance = new SpeechSynthesisUtterance(cleanSpokenText);
-        utterance.rate = state.speechRate;
-        utterance.pitch = 1.05;
+        utterance.rate = state.speechRate || 1.05;
+        utterance.pitch = 1.0;
 
         const voices = window.speechSynthesis.getVoices();
         const preferredVoice = voices.find(v => (v.name.includes('Natural') || v.name.includes('Google') || v.name.includes('Samantha') || v.name.includes('Zira') || v.lang.startsWith('en')));
@@ -2425,24 +2471,24 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
 
         utterance.onstart = () => {
             state.isSpeaking = true;
-            updateSpeakingIndicatorUI();
+            updateSpeakingIndicatorUI(true, msgId);
         };
 
         utterance.onend = () => {
             state.isSpeaking = false;
-            updateSpeakingIndicatorUI();
+            updateSpeakingIndicatorUI(false, null);
         };
 
         utterance.onerror = () => {
             state.isSpeaking = false;
-            updateSpeakingIndicatorUI();
+            updateSpeakingIndicatorUI(false, null);
         };
 
         window.speechSynthesis.speak(utterance);
     }
 
     // ==========================================
-    // SPEECH-TO-TEXT (STT) VOICE INPUT
+    // SPEECH-TO-TEXT (STT) VOICE INPUT WITH NATURAL PAUSE AUTO-SEND
     // ==========================================
     let recognition = null;
 
@@ -2456,9 +2502,9 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
         rec.lang = 'en-US';
 
         rec.onstart = () => {
-            stopSpeakingVoice(); // Immediately halt any voice speech when mic starts listening!
+            stopSpeakingVoice();
             state.isRecording = true;
-            elements.micBtn.classList.add('recording');
+            if (elements.micBtn) elements.micBtn.classList.add('recording');
             showToast('Listening... Speak now', 'mic');
             playSound('click');
         };
@@ -2476,7 +2522,7 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
         rec.onerror = (event) => {
             console.warn('Speech recognition error:', event.error);
             stopRecording();
-            showToast(`Voice error: ${event.error}`, 'alert-triangle');
+            showToast(`Voice input: ${event.error}`, 'alert-triangle');
         };
 
         rec.onend = () => {
@@ -2492,6 +2538,52 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
     function toggleRecording() {
         stopSpeakingVoice(); // Stop voice audio playback immediately when user clicks mic!
 
+        if (state.isRecording) {
+            if (window.voiceService) {
+                window.voiceService.stopListening();
+            } else if (recognition) {
+                recognition.stop();
+            }
+            stopRecording();
+            return;
+        }
+
+        if (window.voiceService && (window.SpeechRecognition || window.webkitSpeechRecognition)) {
+            window.voiceService.startListening({
+                onStart: () => {
+                    state.isRecording = true;
+                    if (elements.micBtn) elements.micBtn.classList.add('recording');
+                    showToast('Listening... Speak now', 'mic');
+                    playSound('click');
+                },
+                onResult: (currentTotal) => {
+                    elements.userInput.value = currentTotal;
+                    handleInputChange();
+                },
+                onFinal: (finalTranscript) => {
+                    stopRecording();
+                    if (finalTranscript && finalTranscript.trim()) {
+                        elements.userInput.value = finalTranscript.trim();
+                        handleInputChange();
+                        handleSendMessage();
+                    }
+                },
+                onEnd: (finalTranscript) => {
+                    stopRecording();
+                    if (elements.userInput.value.trim()) {
+                        elements.userInput.focus();
+                    }
+                },
+                onError: (err) => {
+                    stopRecording();
+                    console.warn('[Voice Companion] Recognition notice:', err);
+                },
+                autoSendOnPause: true
+            });
+            return;
+        }
+
+        // Fallback STT
         if (!recognition) {
             recognition = initSpeechRecognition();
         }
@@ -2501,22 +2593,20 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
             return;
         }
 
-        if (state.isRecording) {
-            recognition.stop();
-            stopRecording();
-        } else {
-            try {
-                recognition.start();
-            } catch (e) {
-                console.error(e);
-            }
+        try {
+            recognition.start();
+        } catch (e) {
+            console.error(e);
         }
     }
 
     function stopRecording() {
         state.isRecording = false;
-        elements.micBtn.classList.remove('recording');
-        stopSpeakingVoice(); // Stop voice audio playback whenever mic recording ends!
+        if (elements.micBtn) elements.micBtn.classList.remove('recording');
+        if (window.voiceService) {
+            window.voiceService.stopListening();
+        }
+        stopSpeakingVoice();
     }
 
     // ==========================================
@@ -2667,9 +2757,37 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
     // ==========================================
     // PRESENTATION (.PPTX) DECK ENGINE
     // ==========================================
-    // ==========================================
-    // PRESENTATION (.PPTX) DECK ENGINE
-    // ==========================================
+
+    function hashCode(str) {
+        let hash = 0;
+        const s = String(str || '');
+        for (let i = 0; i < s.length; i++) {
+            hash = (hash << 5) - hash + s.charCodeAt(i);
+            hash |= 0;
+        }
+        return hash;
+    }
+
+    function buildContextualSlideImageUrl(slide, topic, index) {
+        const slideObj = slide || {};
+        const rawTitle = slideObj.title || slideObj.slide_title || '';
+        const keySubject = String(rawTitle).replace(/[^a-zA-Z0-9 ]/g, '').trim();
+        let specificContext = String(slideObj.image_prompt || slideObj.visual_description || slideObj.image_search_query || `${topic} ${keySubject}`).trim();
+        specificContext = specificContext.replace(/\b(abstract|surreal|geometric shapes|neon glow|digital wave|glowing swirls|3D data visualization|hologram)\b/gi, '').trim();
+        if (!specificContext) specificContext = `${topic} ${keySubject}`;
+
+        // Enforce realistic, documentary, or technical photography style matching the domain
+        const enhancedPrompt = `${specificContext}, high resolution documentary photography, editorial photo, realistic lighting, 4k, hyper-detailed, clean sharp focus, authentic context`;
+
+        // Generate deterministic seed based on topic and slide index so images stay consistent
+        const seed = Math.abs(hashCode(`${topic}_slide_${index}`));
+
+        return `https://image.pollinations.ai/prompt/${encodeURIComponent(enhancedPrompt)}?width=900&height=550&nologo=true&seed=${seed}`;
+    }
+
+    window.hashCode = hashCode;
+    window.buildContextualSlideImageUrl = buildContextualSlideImageUrl;
+
     function renderPresentationCardHtml(deck) {
         const title = escapeHtml(deck.deck_title || deck.title || 'Executive Keynote');
         const subtitle = escapeHtml(deck.subtitle || '');
@@ -2680,28 +2798,42 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
         window._shiviDecks[deckId] = deck;
 
         const slidesHtml = (deck.slides || []).map((slide, idx) => {
-            const badge = slide.badge ? `<span class="slide-mini-badge">${escapeHtml(slide.badge)}</span>` : '';
+            const categoryText = slide.category || slide.badge || (idx === 0 ? 'EXECUTIVE BRIEFING' : `PILLAR 0${idx + 1}`);
+            const badge = `<span class="slide-mini-badge">${escapeHtml(categoryText)}</span>`;
             const metric = slide.highlight_metric && slide.highlight_metric.value 
                 ? `<span class="slide-mini-metric">${escapeHtml(slide.highlight_metric.value)}</span>` 
                 : '';
             
             let pointsList = '';
-            if (Array.isArray(slide.cards_or_points) && slide.cards_or_points.length > 0) {
+            if (Array.isArray(slide.bullets) && slide.bullets.length > 0) {
+                pointsList = slide.bullets.slice(0, 3).map(b => {
+                    const bStr = String(b).trim();
+                    if (bStr.includes(':')) {
+                        const parts = bStr.split(':');
+                        const k = parts[0].replace(/\*/g, '').trim();
+                        const d = parts.slice(1).join(':').trim();
+                        return `<li><strong>${escapeHtml(k)}:</strong> ${escapeHtml(d)}</li>`;
+                    }
+                    return `<li>${escapeHtml(bStr.replace(/\*/g, ''))}</li>`;
+                }).join('');
+            } else if (Array.isArray(slide.cards_or_points) && slide.cards_or_points.length > 0) {
                 pointsList = slide.cards_or_points.slice(0, 3).map(c => 
-                    `<li><strong>${escapeHtml(c.label || '')}:</strong> ${escapeHtml(c.detail || '')}</li>`
+                    `<li><strong>${escapeHtml(c.title || c.label || '')}:</strong> ${escapeHtml(c.description || c.detail || '')}</li>`
                 ).join('');
-            } else if (Array.isArray(slide.bullets) && slide.bullets.length > 0) {
-                pointsList = slide.bullets.slice(0, 3).map(b => `<li>${escapeHtml(b)}</li>`).join('');
             }
+
+            const imgPrompt = slide.image_prompt || '';
+            const visualBadge = imgPrompt ? `<span class="slide-mini-badge" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3);" title="${escapeHtml(imgPrompt)}">🖼️ AI Visual</span>` : '';
 
             return `
                 <div class="deck-slide-item">
                     <div class="slide-num">${idx + 1}</div>
                     <div class="slide-content">
                         <div class="slide-item-topbar">
-                            <h5>${escapeHtml(slide.slide_title || `Slide ${idx + 1}`)}</h5>
+                            <h5>${escapeHtml(slide.slide_title || slide.title || `Slide ${idx + 1}`)}</h5>
                             <div class="slide-item-pills">
                                 ${badge}
+                                ${visualBadge}
                                 ${metric}
                             </div>
                         </div>
@@ -2847,71 +2979,154 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                 const contentTop = 1.95;
                 const contentHeight = 4.75;
 
-                // 1. HERO STAT LAYOUT
-                if (layout === 'hero_stat') {
+                // -------------------------------------------------------------
+                // 1. TITLE HERO LAYOUT (Slide 1)
+                // -------------------------------------------------------------
+                if (idx === 0 || layout === 'title' || layout === 'title_hero') {
+                    const colW = 5.65;
+
+                    // Left Column: Strategic Summary Card
                     slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
-                        x: 0.8, y: contentTop, w: 4.6, h: contentHeight,
+                        x: 0.8, y: contentTop, w: colW, h: contentHeight,
                         fill: { color: cardBgHex },
-                        line: { color: cardBorderHex, width: 1.5 },
+                        line: { color: cardBorderHex, width: 1 },
                         rectRadius: 0.12
                     });
 
-                    slide.addText(metric.value || '+148%', {
-                        x: 1.1, y: 2.3, w: 4.0, h: 1.5,
-                        fontSize: 46, bold: true, color: accentHex,
-                        fontFace: 'Arial', valign: 'middle'
+                    const leftRuns = [];
+                    const objText = s.objective || `Deliver an authoritative executive briefing on ${deckTitle}.`;
+                    leftRuns.push({ text: '🎯 STRATEGIC OBJECTIVE:\n', options: { bold: true, fontSize: 11.5, color: altAccentHex, fontFace: 'Arial' } });
+                    leftRuns.push({ text: `${objText}\n\n`, options: { bold: false, fontSize: 11, color: bodyHex, fontFace: 'Arial' } });
+
+                    const bulletsList = (s.bullets && s.bullets.length > 0) ? s.bullets : cards.map(c => `**${c.title || c.label || 'Pillar'}**: ${c.description || c.detail || ''}`);
+                    bulletsList.slice(0, 3).forEach(bItem => {
+                        const bStr = String(bItem).trim();
+                        if (bStr.includes(':')) {
+                            const parts = bStr.split(':');
+                            const k = parts[0].replace(/\*/g, '').trim();
+                            const d = parts.slice(1).join(':').trim();
+                            leftRuns.push({ text: `✦ ${k}: `, options: { bold: true, fontSize: 11.5, color: accentHex, fontFace: 'Arial' } });
+                            leftRuns.push({ text: `${d}\n\n`, options: { bold: false, fontSize: 11, color: bodyHex, fontFace: 'Arial' } });
+                        } else {
+                            leftRuns.push({ text: `✦ ${bStr}\n\n`, options: { bold: false, fontSize: 11, color: bodyHex, fontFace: 'Arial' } });
+                        }
                     });
 
-                    slide.addText(metric.caption || 'Annualized adoption benchmark', {
-                        x: 1.1, y: 3.8, w: 4.0, h: 0.9,
-                        fontSize: 13, bold: true, color: titleHex,
-                        fontFace: 'Arial', valign: 'top'
+                    leftRuns.push({ text: 'Created with ShiviAI • Executive Keynote Widescreen Edition', options: { italic: true, fontSize: 9.5, color: subHex, fontFace: 'Arial' } });
+
+                    slide.addText(leftRuns, {
+                        x: 1.05, y: contentTop + 0.2, w: colW - 0.5, h: contentHeight - 0.4,
+                        valign: 'top'
                     });
 
-                    slide.addShape(pptx.shapes.LINE, {
-                        x: 1.1, y: 4.8, w: 3.8, h: 0,
-                        line: { color: cardBorderHex, width: 1 }
+                    // Right column: AI Generated Visual Image
+                    const imgPrompt = s.image_prompt || s.visual_prompt || `${deckTitle} ${slideTitle}`;
+                    const imgUrl = s.image_url || buildContextualSlideImageUrl(s, deckTitle, idx + 1);
+
+                    slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
+                        x: 6.85, y: contentTop, w: colW, h: contentHeight,
+                        fill: { color: cardBgHex },
+                        line: { color: accentHex, width: 1.2 },
+                        rectRadius: 0.12
                     });
 
-                    slide.addText(`Empirical production metric reflecting acceleration across verified ${deckTitle} frameworks.`, {
-                        x: 1.1, y: 5.0, w: 4.0, h: 1.3,
-                        fontSize: 10.5, color: subHex,
-                        fontFace: 'Arial', valign: 'top'
-                    });
+                    try {
+                        slide.addImage({
+                            path: imgUrl,
+                            x: 6.9,
+                            y: contentTop + 0.05,
+                            w: colW - 0.1,
+                            h: contentHeight - 0.45,
+                            rounding: true
+                        });
+                    } catch (imgErr) {
+                        console.warn('PptxGenJS addImage warning:', imgErr);
+                    }
 
-                    const numCards = Math.min(cards.length, 2);
-                    const cardH = (contentHeight - 0.3) / 2;
-                    for (let i = 0; i < numCards; i++) {
-                        const cy = contentTop + i * (cardH + 0.3);
-                        const c = cards[i] || { label: `Pillar ${i + 1}`, detail: 'Actionable insight point' };
+                    slide.addText(`✦ AI Visual: ${imgPrompt}`, {
+                        x: 6.9, y: contentTop + contentHeight - 0.38, w: colW - 0.1, h: 0.32,
+                        fontSize: 9, italic: true, color: subHex,
+                        fontFace: 'Arial', align: 'center', valign: 'middle'
+                    });
+                }
+                // -------------------------------------------------------------
+                // 2. SPLIT IMAGE & CONTENT LAYOUT (With 3-4 Bullets & Dynamic AI Visual)
+                // -------------------------------------------------------------
+                else if (layout === 'split_image_content' || s.bullets || s.image_prompt || s.image_url) {
+                    const colW = 5.65;
+                    const bulletsList = (s.bullets && s.bullets.length > 0) ? s.bullets : cards.map(c => `**${c.title || c.label || 'Pillar'}**: ${c.description || c.detail || ''}`);
+                    const numBullets = Math.min(Math.max(bulletsList.length, 2), 4);
+                    const cardGap = 0.15;
+                    const cardH = (contentHeight - (cardGap * (numBullets - 1))) / numBullets;
+
+                    for (let bIdx = 0; bIdx < numBullets; bIdx++) {
+                        const bStr = String(bulletsList[bIdx] || bulletsList[bulletsList.length - 1]).trim();
+                        const cy = contentTop + bIdx * (cardH + cardGap);
 
                         slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
-                            x: 5.7, y: cy, w: 6.8, h: cardH,
+                            x: 0.8, y: cy, w: colW, h: cardH,
                             fill: { color: cardBgHex },
                             line: { color: cardBorderHex, width: 1 },
-                            rectRadius: 0.12
+                            rectRadius: 0.1
                         });
 
+                        // Left Accent Strip
                         slide.addShape(pptx.shapes.RECTANGLE, {
-                            x: 5.9, y: cy + 0.18, w: 1.2, h: 0.05,
-                            fill: { color: i === 0 ? accentHex : altAccentHex },
-                            line: { color: i === 0 ? accentHex : altAccentHex }
+                            x: 0.8, y: cy + 0.08, w: 0.08, h: cardH - 0.16,
+                            fill: { color: bIdx % 2 === 0 ? accentHex : altAccentHex },
+                            line: { color: bIdx % 2 === 0 ? accentHex : altAccentHex }
                         });
 
-                        slide.addText(c.label, {
-                            x: 5.9, y: cy + 0.35, w: 6.4, h: 0.38,
-                            fontSize: 16, bold: true, color: titleHex,
-                            fontFace: 'Arial'
-                        });
+                        let keyword = `Pillar ${bIdx + 1}`;
+                        let desc = bStr;
+                        if (bStr.includes(':')) {
+                            const parts = bStr.split(':');
+                            keyword = parts[0].replace(/\*/g, '').trim();
+                            desc = parts.slice(1).join(':').trim();
+                        }
 
-                        slide.addText(c.detail, {
-                            x: 5.9, y: cy + 0.8, w: 6.4, h: cardH - 0.95,
-                            fontSize: 12.5, color: bodyHex,
-                            fontFace: 'Arial', valign: 'top'
+                        const bulletRuns = [
+                            { text: `✦ ${keyword}: `, options: { bold: true, fontSize: 12, color: accentHex, fontFace: 'Arial' } },
+                            { text: desc, options: { bold: false, fontSize: 11, color: bodyHex, fontFace: 'Arial' } }
+                        ];
+
+                        slide.addText(bulletRuns, {
+                            x: 1.05, y: cy + 0.1, w: colW - 0.35, h: cardH - 0.2,
+                            valign: 'middle'
                         });
                     }
+
+                    // Right column: AI Generated Visual Image
+                    const imgPrompt = s.image_prompt || s.visual_prompt || `${deckTitle} ${slideTitle}`;
+                    const imgUrl = s.image_url || buildContextualSlideImageUrl(s, deckTitle, idx + 1);
+
+                    slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
+                        x: 6.85, y: contentTop, w: colW, h: contentHeight,
+                        fill: { color: cardBgHex },
+                        line: { color: accentHex, width: 1.2 },
+                        rectRadius: 0.12
+                    });
+
+                    try {
+                        slide.addImage({
+                            path: imgUrl,
+                            x: 6.9,
+                            y: contentTop + 0.05,
+                            w: colW - 0.1,
+                            h: contentHeight - 0.45,
+                            rounding: true
+                        });
+                    } catch (imgErr) {
+                        console.warn('PptxGenJS addImage warning:', imgErr);
+                    }
+
+                    slide.addText(`✦ AI Visual: ${imgPrompt}`, {
+                        x: 6.9, y: contentTop + contentHeight - 0.38, w: colW - 0.1, h: 0.32,
+                        fontSize: 9, italic: true, color: subHex,
+                        fontFace: 'Arial', align: 'center', valign: 'middle'
+                    });
                 }
-                // 2. CARD GRID LAYOUT (3 to 4 Modular Cards in Horizontal Grid)
+                // 3. CARD GRID LAYOUT (Optional fallback)
                 else if (layout === 'card_grid') {
                     const numCards = Math.min(cards.length, 4);
                     const totalW = 11.7;
@@ -2969,72 +3184,7 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                         }
                     }
                 }
-                // 3. SPLIT IMAGE & CONTENT LAYOUT
-                else if (layout === 'split_image_content' || s.image_prompt || s.image_url) {
-                    const colW = 5.65;
-                    const leftCards = cards.slice(0, 2);
-                    const cardH = (contentHeight - 0.25) / 2;
 
-                    for (let i = 0; i < leftCards.length; i++) {
-                        const cy = contentTop + i * (cardH + 0.25);
-                        const c = leftCards[i] || { label: `Strategic Pillar ${i + 1}`, detail: 'Actionable insight point' };
-
-                        slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
-                            x: 0.8, y: cy, w: colW, h: cardH,
-                            fill: { color: cardBgHex },
-                            line: { color: cardBorderHex, width: 1 },
-                            rectRadius: 0.12
-                        });
-
-                        slide.addShape(pptx.shapes.RECTANGLE, {
-                            x: 1.05, y: cy + 0.18, w: 1.0, h: 0.05,
-                            fill: { color: i === 0 ? accentHex : altAccentHex },
-                            line: { color: i === 0 ? accentHex : altAccentHex }
-                        });
-
-                        slide.addText(c.title || c.label, {
-                            x: 1.05, y: cy + 0.35, w: colW - 0.5, h: 0.38,
-                            fontSize: 15, bold: true, color: titleHex,
-                            fontFace: 'Arial'
-                        });
-
-                        slide.addText(c.description || c.detail, {
-                            x: 1.05, y: cy + 0.8, w: colW - 0.5, h: cardH - 0.95,
-                            fontSize: 11.5, color: bodyHex,
-                            fontFace: 'Arial', valign: 'top'
-                        });
-                    }
-
-                    // Right column: AI Generated Visual Image
-                    const imgPrompt = s.image_prompt || s.visual_prompt || s.image_keyword || `${deckTitle} ${slideTitle}`;
-                    const imgUrl = s.image_url || `https://image.pollinations.ai/prompt/${encodeURIComponent(imgPrompt)}?width=800&height=600&nologo=true`;
-
-                    slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
-                        x: 6.85, y: contentTop, w: colW, h: contentHeight,
-                        fill: { color: cardBgHex },
-                        line: { color: accentHex, width: 1.2 },
-                        rectRadius: 0.12
-                    });
-
-                    try {
-                        slide.addImage({
-                            path: imgUrl,
-                            x: 6.9,
-                            y: contentTop + 0.05,
-                            w: colW - 0.1,
-                            h: contentHeight - 0.45,
-                            rounding: true
-                        });
-                    } catch (imgErr) {
-                        console.warn('PptxGenJS addImage warning:', imgErr);
-                    }
-
-                    slide.addText(`✦ AI Visual: ${imgPrompt}`, {
-                        x: 6.9, y: contentTop + contentHeight - 0.38, w: colW - 0.1, h: 0.32,
-                        fontSize: 9, italic: true, color: subHex,
-                        fontFace: 'Arial', align: 'center', valign: 'middle'
-                    });
-                }
                 // 4. SPLIT INSIGHT LAYOUT
                 else if (layout === 'split_insight') {
                     const colW = 5.65;
@@ -3554,17 +3704,17 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
         state.canvas.currentSlideIndex = currentIdx;
 
         const currentSlide = slides[currentIdx];
-        let layoutType = String(currentSlide.layout || currentSlide.layout_type || 'card_grid').toLowerCase();
+        let layoutType = String(currentSlide.layout || currentSlide.layout_type || 'split_image_content').toLowerCase();
         
         // Systematic preset mapping:
-        if (currentIdx === 0 && (layoutType === 'title' || layoutType === 'hero_stat' || !layoutType)) {
-            layoutType = 'title';
-        } else if (layoutType === 'split_image_content' || layoutType === 'image_split' || layoutType === 'visual_split' || currentSlide.image_prompt) {
-            layoutType = 'split_image_content';
-        } else if (layoutType === 'metric_split' || layoutType === 'hero_stat' || layoutType === 'split_insight') {
+        if (currentIdx === 0 || layoutType === 'title' || layoutType === 'title_hero') {
+            layoutType = 'title_hero';
+        } else if (layoutType === 'metric_split' || layoutType === 'hero_stat') {
             layoutType = 'metric_split';
-        } else {
+        } else if (layoutType === 'card_grid') {
             layoutType = 'card_grid';
+        } else {
+            layoutType = 'split_image_content';
         }
 
         const deckTitle = deck.deck_title || deck.title || 'Executive Presentation';
@@ -3582,7 +3732,7 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
 
         // Layout badge indicator
         if (elements.pptLayoutBadge) {
-            if (layoutType === 'title') elements.pptLayoutBadge.textContent = 'TITLE SLIDE';
+            if (layoutType === 'title_hero') elements.pptLayoutBadge.textContent = 'TITLE HERO';
             else if (layoutType === 'split_image_content') elements.pptLayoutBadge.textContent = 'SPLIT IMAGE & CONTENT';
             else if (layoutType === 'metric_split') elements.pptLayoutBadge.textContent = 'METRIC SPLIT';
             else elements.pptLayoutBadge.textContent = '3-CARD GRID';
@@ -3644,7 +3794,7 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                 elements.pptSlideStage.classList.add('theme-dark-modern');
             }
 
-            const badgeText = currentSlide.badge || (currentIdx === 0 ? 'EXECUTIVE BRIEFING' : `STRATEGIC PILLAR ${String(currentIdx).padStart(2, '0')}`);
+            const badgeText = currentSlide.category || currentSlide.badge || (currentIdx === 0 ? 'EXECUTIVE BRIEFING' : `STRATEGIC PILLAR ${String(currentIdx).padStart(2, '0')}`);
             const slideTitle = currentSlide.slide_title || currentSlide.title || `Slide ${currentIdx + 1}`;
             const subtitle = currentSlide.subtitle || '';
             const rawCards = currentSlide.cards_or_points || currentSlide.cards || [];
@@ -3657,30 +3807,166 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
             }));
 
             // -------------------------------------------------------------
-            // PRESET 1: TITLE SLIDE (Centered badge, punchy 32px headline, metadata)
+            // PRESET 1: TITLE HERO SLIDE (Slide 1: Executive Headline + AI Visual)
             // -------------------------------------------------------------
-            if (layoutType === 'title') {
+            if (layoutType === 'title_hero') {
+                const imgPrompt = currentSlide.image_prompt || currentSlide.visual_prompt || `${deckTitle} ${slideTitle}`;
+                const imgUrl = currentSlide.image_url || buildContextualSlideImageUrl(currentSlide, deckTitle, currentIdx + 1);
+                const seed = Math.abs(hashCode(`${deckTitle}_slide_${currentIdx + 1}`));
+                const fallbackUrl = currentSlide.fallback_image_url || `https://picsum.photos/seed/${seed}/900/550`;
+                const objectiveText = currentSlide.objective || `Deliver an authoritative strategic briefing on ${deckTitle}.`;
+
+                let bulletsList = [];
+                if (Array.isArray(currentSlide.bullets) && currentSlide.bullets.length > 0) {
+                    bulletsList = currentSlide.bullets;
+                } else if (cards.length > 0) {
+                    bulletsList = cards.map(c => `**${c.title}**: ${c.description}`);
+                }
+
+                const titleBulletsHtml = bulletsList.slice(0, 3).map(b => {
+                    const bStr = String(b).trim();
+                    if (bStr.includes(':')) {
+                        const parts = bStr.split(':');
+                        const k = parts[0].replace(/\*/g, '').trim();
+                        const d = parts.slice(1).join(':').trim();
+                        return `<div class="title-hero-bullet-card"><strong class="bullet-keyword">${escapeHtml(k)}:</strong> <span class="bullet-desc">${escapeHtml(d)}</span></div>`;
+                    }
+                    return `<div class="title-hero-bullet-card"><span class="bullet-desc">${escapeHtml(bStr.replace(/\*/g, ''))}</span></div>`;
+                }).join('');
+
                 elements.pptSlideStage.innerHTML = `
-                    <div class="keynote-slide-container slide-template-title">
-                        <div class="title-slide-content">
-                            <div class="title-badge-wrapper">
-                                <span class="slide-badge-pill">${escapeHtml(badgeText)}</span>
+                    <div class="keynote-slide-container slide-template-title-hero">
+                        <div class="title-hero-grid">
+                            <div class="title-hero-left">
+                                <div>
+                                    <div class="header-top-meta" style="margin-bottom: 6px;">
+                                        <span class="slide-badge-pill">${escapeHtml(badgeText)}</span>
+                                        <span class="slide-number-tag">${formattedCounter}</span>
+                                    </div>
+                                    <h2 class="title-hero-headline">${escapeHtml(slideTitle)}</h2>
+                                    <p class="title-hero-subheadline">${escapeHtml(subtitle || 'Executive Strategic Architecture & Validated Operational Roadmap')}</p>
+                                    ${objectiveText ? `
+                                    <div class="title-hero-objective">
+                                        <i data-lucide="target"></i>
+                                        <span><strong>STRATEGIC OBJECTIVE:</strong> ${escapeHtml(objectiveText)}</span>
+                                    </div>` : ''}
+                                </div>
+                                <div class="title-hero-bullets-list">
+                                    ${titleBulletsHtml}
+                                </div>
+                                <div class="title-meta-footer" style="margin-top: auto; padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.08);">
+                                    <div class="meta-item author-tag">
+                                        <i data-lucide="sparkles"></i>
+                                        <span>Created with ShiviAI</span>
+                                    </div>
+                                    <div class="meta-item">
+                                        <i data-lucide="layers"></i>
+                                        <span>${total} Slides</span>
+                                    </div>
+                                    <div class="meta-item">
+                                        <i data-lucide="calendar"></i>
+                                        <span>${new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}</span>
+                                    </div>
+                                </div>
                             </div>
-                            <h2 class="title-headline">${escapeHtml(slideTitle)}</h2>
-                            <p class="title-subtitle">${escapeHtml(subtitle || 'Executive Strategic Architecture & Validated Operational Roadmap')}</p>
-                            <div class="title-meta-divider"></div>
-                            <div class="title-meta-footer">
-                                <div class="meta-item">
-                                    <i data-lucide="layers"></i>
-                                    <span>${total} Structured Slides</span>
+                            <div class="title-hero-right">
+                                <div class="slide-media-card" style="height: 100%;">
+                                    <div class="slide-img-skeleton">
+                                        <div class="skeleton-shimmer"></div>
+                                        <i data-lucide="image" class="skeleton-icon"></i>
+                                        <span>Rendering AI Visual...</span>
+                                    </div>
+                                    <img src="${imgUrl}" 
+                                         alt="${escapeHtml(imgPrompt)}" 
+                                         class="slide-ai-visual-img"
+                                         loading="lazy"
+                                         onload="if(this.previousElementSibling) this.previousElementSibling.style.display='none'; this.classList.add('loaded');"
+                                         onerror="if(this.previousElementSibling) this.previousElementSibling.style.display='none'; this.classList.add('loaded'); this.src='${fallbackUrl}';" />
+                                    <div class="slide-image-badge-pill">
+                                        <i data-lucide="sparkles"></i>
+                                        <span class="image-prompt-text" title="${escapeHtml(imgPrompt)}">${escapeHtml(imgPrompt)}</span>
+                                    </div>
                                 </div>
-                                <div class="meta-item">
-                                    <i data-lucide="shield-check"></i>
-                                    <span>Enterprise Domain Grounded</span>
+                            </div>
+                        </div>
+                        <div class="slide-keynote-footer">Shivi AI Presentation Studio • ${formattedCounter}</div>
+                    </div>
+                `;
+            }
+            // -------------------------------------------------------------
+            // PRESET 2: SPLIT IMAGE & CONTENT SLIDE (3-4 Rich Bullets + AI Visual)
+            // -------------------------------------------------------------
+            else if (layoutType === 'split_image_content') {
+                const imgPrompt = currentSlide.image_prompt || currentSlide.visual_prompt || `${deckTitle} ${slideTitle}`;
+                const imgUrl = currentSlide.image_url || buildContextualSlideImageUrl(currentSlide, deckTitle, currentIdx + 1);
+                const seed = Math.abs(hashCode(`${deckTitle}_slide_${currentIdx + 1}`));
+                const fallbackUrl = currentSlide.fallback_image_url || `https://picsum.photos/seed/${seed}/900/550`;
+                const objectiveText = currentSlide.objective || '';
+
+                let bulletsList = [];
+                if (Array.isArray(currentSlide.bullets) && currentSlide.bullets.length > 0) {
+                    bulletsList = currentSlide.bullets;
+                } else if (cards.length > 0) {
+                    bulletsList = cards.map(c => `**${c.title}**: ${c.description}`);
+                }
+
+                const bulletsHtml = bulletsList.slice(0, 4).map(b => {
+                    const bStr = String(b).trim();
+                    let keyword = 'Operational Vector';
+                    let desc = bStr;
+                    if (bStr.includes(':')) {
+                        const parts = bStr.split(':');
+                        keyword = parts[0].replace(/\*/g, '').trim();
+                        desc = parts.slice(1).join(':').trim();
+                    } else {
+                        desc = bStr.replace(/\*/g, '').trim();
+                    }
+                    return `
+                        <div class="bullet-item-card">
+                            <strong class="bullet-keyword">${escapeHtml(keyword)}:</strong>
+                            <span class="bullet-desc">${escapeHtml(desc)}</span>
+                        </div>
+                    `;
+                }).join('');
+
+                elements.pptSlideStage.innerHTML = `
+                    <div class="keynote-slide-container slide-template-split-image">
+                        <div class="slide-keynote-header">
+                            <div class="header-top-meta">
+                                <span class="slide-badge-pill">${escapeHtml(badgeText)}</span>
+                                <span class="slide-number-tag">${formattedCounter}</span>
+                            </div>
+                            <h3 class="slide-headline">${escapeHtml(slideTitle)}</h3>
+                            ${subtitle ? `<p class="slide-subheadline">${escapeHtml(subtitle)}</p>` : ''}
+                        </div>
+                        <div class="split-image-container">
+                            <div class="split-cards-column" style="display: flex; flex-direction: column;">
+                                ${objectiveText ? `
+                                <div class="slide-objective-card">
+                                    <i data-lucide="crosshair"></i>
+                                    <span><strong>CORE OBJECTIVE:</strong> ${escapeHtml(objectiveText)}</span>
+                                </div>` : ''}
+                                <div class="split-bullets-group">
+                                    ${bulletsHtml}
                                 </div>
-                                <div class="meta-item">
-                                    <i data-lucide="calendar"></i>
-                                    <span>${new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}</span>
+                            </div>
+                            <div class="split-media-column">
+                                <div class="slide-media-card">
+                                    <div class="slide-img-skeleton">
+                                        <div class="skeleton-shimmer"></div>
+                                        <i data-lucide="image" class="skeleton-icon"></i>
+                                        <span>Rendering AI Visual...</span>
+                                    </div>
+                                    <img src="${imgUrl}" 
+                                         alt="${escapeHtml(imgPrompt)}" 
+                                         class="slide-ai-visual-img"
+                                         loading="lazy"
+                                         onload="if(this.previousElementSibling) this.previousElementSibling.style.display='none'; this.classList.add('loaded');"
+                                         onerror="if(this.previousElementSibling) this.previousElementSibling.style.display='none'; this.classList.add('loaded'); this.src='${fallbackUrl}';" />
+                                    <div class="slide-image-badge-pill">
+                                        <i data-lucide="sparkles"></i>
+                                        <span class="image-prompt-text" title="${escapeHtml(imgPrompt)}">${escapeHtml(imgPrompt)}</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -3743,72 +4029,7 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                 `;
             }
             // -------------------------------------------------------------
-            // PRESET 4: SPLIT IMAGE & CONTENT SLIDE (50% text cards + 50% AI image)
-            // -------------------------------------------------------------
-            else if (layoutType === 'split_image_content') {
-                const imgPrompt = currentSlide.image_prompt || currentSlide.visual_prompt || currentSlide.image_keyword || `${deckTitle} ${slideTitle} futuristic visualization 8k`;
-                const imgUrl = currentSlide.image_url || `https://image.pollinations.ai/prompt/${encodeURIComponent(imgPrompt)}?width=800&height=600&nologo=true`;
-                
-                const splitCards = cards.slice(0, 2);
-                while (splitCards.length < 2) {
-                    splitCards.push({
-                        title: `Strategic Pillar 0${splitCards.length + 1}`,
-                        description: 'Operational orchestration minimizes execution latency while ensuring deterministic throughput across multi-node pipelines.',
-                        tag: 'ORCHESTRATION'
-                    });
-                }
-
-                const splitCardsHtml = splitCards.map((c, i) => `
-                    <div class="preset-card-box split-card-item">
-                        <div class="card-top-accent">
-                            <span class="card-accent-tag">${escapeHtml(c.tag || `PILLAR 0${i + 1}`)}</span>
-                            <span class="card-index-num">0${i + 1}</span>
-                        </div>
-                        <h5>${escapeHtml(c.title)}</h5>
-                        <p>${escapeHtml(c.description)}</p>
-                    </div>
-                `).join('');
-
-                elements.pptSlideStage.innerHTML = `
-                    <div class="keynote-slide-container slide-template-split-image">
-                        <div class="slide-keynote-header">
-                            <div class="header-top-meta">
-                                <span class="slide-badge-pill">${escapeHtml(badgeText)}</span>
-                                <span class="slide-number-tag">${formattedCounter}</span>
-                            </div>
-                            <h3 class="slide-headline">${escapeHtml(slideTitle)}</h3>
-                            ${subtitle ? `<p class="slide-subheadline">${escapeHtml(subtitle)}</p>` : ''}
-                        </div>
-                        <div class="split-image-container">
-                            <div class="split-cards-column">
-                                ${splitCardsHtml}
-                            </div>
-                            <div class="split-media-column">
-                                <div class="slide-media-card">
-                                    <div class="slide-img-skeleton">
-                                        <div class="skeleton-shimmer"></div>
-                                        <i data-lucide="image" class="skeleton-icon"></i>
-                                        <span>Rendering AI Visual...</span>
-                                    </div>
-                                    <img src="${imgUrl}" 
-                                         alt="${escapeHtml(imgPrompt)}" 
-                                         class="slide-ai-visual-img"
-                                         loading="lazy"
-                                         onload="if(this.previousElementSibling) this.previousElementSibling.style.display='none'; this.classList.add('loaded');"
-                                         onerror="if(this.previousElementSibling) this.previousElementSibling.style.display='none'; this.classList.add('loaded'); this.src='https://picsum.photos/seed/${encodeURIComponent(slideTitle)}/800/600';" />
-                                    <div class="slide-image-badge-pill">
-                                        <i data-lucide="sparkles"></i>
-                                        <span class="image-prompt-text" title="${escapeHtml(imgPrompt)}">${escapeHtml(imgPrompt)}</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="slide-keynote-footer">Shivi AI Presentation Studio • ${formattedCounter}</div>
-                    </div>
-                `;
-            }
-            // -------------------------------------------------------------
-            // PRESET 2: 3-CARD GRID SLIDE (3 equal columns, rounded containers, tags)
+            // PRESET 4: 3-CARD GRID SLIDE (3 equal columns, rounded containers, tags)
             // -------------------------------------------------------------
             else {
                 // Strictly 3 cards for clean 16:9 proportion
@@ -3849,6 +4070,17 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                     </div>
                 `;
             }
+
+            // Immediately reveal any cached images without skeleton flash
+            elements.pptSlideStage.querySelectorAll('.slide-ai-visual-img').forEach(img => {
+                if (img.complete && img.naturalWidth > 0) {
+                    const skeleton = img.previousElementSibling;
+                    if (skeleton && skeleton.classList.contains('slide-img-skeleton')) {
+                        skeleton.style.display = 'none';
+                    }
+                    img.classList.add('loaded');
+                }
+            });
 
             if (window.lucide) lucide.createIcons();
         }
@@ -4570,8 +4802,9 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                             <button class="msg-action-btn copy-msg-btn" title="Copy response" data-content="${escapeHtml(msg.content)}">
                                 <i data-lucide="copy"></i>
                             </button>
-                            <button class="msg-action-btn speak-msg-btn" title="Read Aloud" data-content="${escapeHtml(msg.content)}">
+                            <button class="msg-action-btn speak-msg-btn" title="Read Aloud" data-content="${escapeHtml(msg.content)}" data-msg-id="${msg.id || ('msg_' + index)}">
                                 <i data-lucide="volume-2"></i>
+                                <span class="speak-btn-label">Listen</span>
                             </button>
                             <button class="msg-action-btn like-btn" title="Helpful response">
                                 <i data-lucide="thumbs-up"></i>
@@ -4652,7 +4885,12 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
             const speakBtn = row.querySelector('.speak-msg-btn');
             if (speakBtn) {
                 speakBtn.addEventListener('click', () => {
-                    speakText(msg.content);
+                    const msgId = speakBtn.getAttribute('data-msg-id') || msg.id;
+                    if (window.voiceService && window.voiceService.isSpeaking && window.voiceService.currentlySpeakingMsgId === msgId) {
+                        stopSpeakingVoice();
+                    } else {
+                        speakText(msg.content, msgId);
+                    }
                 });
             }
 
@@ -4897,8 +5135,14 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                 return { type: 'PPT_PROMPT' };
             }
             const slideMatch = rawTopic.match(/(\d+)\s*(?:slides?|slide deck)/i);
-            const slideCount = slideMatch && slideMatch[1] ? Math.max(2, parseInt(slideMatch[1], 10)) : null;
-            return { type: 'PRESENTATION', topic: rawTopic, slideCount: slideCount };
+            const slideCount = slideMatch && slideMatch[1] ? Math.min(20, Math.max(5, parseInt(slideMatch[1], 10))) : null;
+            let cleanTopic = rawTopic
+                .replace(/(?:^|\s)(?:(\d+)\s*(?:slides?|slide deck)|(?:on|about|for)\s+(\d+)\s*(?:slides?|slide deck))\s*(?:on|about|for)?\s*/gi, ' ')
+                .replace(/\s*(?:on|about|for)?\s*(\d+)\s*(?:slides?|slide deck)\s*$/gi, '')
+                .replace(/^(?:on|about|for)\s+/i, '')
+                .trim();
+            if (!cleanTopic) cleanTopic = rawTopic;
+            return { type: 'PRESENTATION', topic: cleanTopic, slideCount: slideCount };
         }
 
         if (isPptNatural) {
@@ -4914,7 +5158,7 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                 return { type: 'PPT_PROMPT' };
             }
             const slideMatch = t.match(/(\d+)\s*(?:slides?|slide deck)/i);
-            const slideCount = slideMatch && slideMatch[1] ? Math.max(2, parseInt(slideMatch[1], 10)) : null;
+            const slideCount = slideMatch && slideMatch[1] ? Math.min(20, Math.max(5, parseInt(slideMatch[1], 10))) : null;
             return { type: 'PRESENTATION', topic: topic, slideCount: slideCount };
         }
 
@@ -5253,6 +5497,7 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
             elements.typingIndicator.style.display = 'none';
 
             const aiMsg = {
+                id: 'msg_' + Date.now(),
                 role: 'assistant',
                 content: aiReply,
                 timestamp: new Date().toISOString()
@@ -5265,8 +5510,8 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
             playSound('receive');
 
             // Optional Voice Read Aloud
-            if (state.voiceEnabled) {
-                speakText(aiReply);
+            if (window.voiceService ? window.voiceService.isVoiceEnabled : state.voiceEnabled) {
+                speakText(aiReply, aiMsg.id);
             }
 
         } catch (err) {
@@ -6473,8 +6718,14 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
     }
 
     function updateVoiceIcon() {
-        elements.voiceToggleBtn.classList.toggle('active', state.voiceEnabled);
-        elements.voiceIcon.setAttribute('data-lucide', state.voiceEnabled ? 'volume-2' : 'volume-x');
+        const isEnabled = window.voiceService ? window.voiceService.isVoiceEnabled : state.voiceEnabled;
+        state.voiceEnabled = isEnabled;
+        if (elements.voiceToggleBtn) {
+            elements.voiceToggleBtn.classList.toggle('active', isEnabled);
+        }
+        if (elements.voiceIcon) {
+            elements.voiceIcon.setAttribute('data-lucide', isEnabled ? 'volume-2' : 'volume-x');
+        }
         if (window.lucide) lucide.createIcons();
     }
 
@@ -6740,7 +6991,7 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
             elements.micBtn.addEventListener('click', toggleRecording);
         }
 
-        // Stop Speaking Audio Button
+        // Stop Speaking Audio Button (Header)
         if (elements.stopSpeakingBtn) {
             elements.stopSpeakingBtn.addEventListener('click', () => {
                 stopSpeakingVoice();
@@ -6748,15 +6999,31 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
             });
         }
 
+        // Floating Speaking Indicator Mute Button
+        if (elements.floatingMuteBtn) {
+            elements.floatingMuteBtn.addEventListener('click', () => {
+                stopSpeakingVoice();
+                showToast('Voice readout muted', 'volume-x');
+            });
+        }
+
         // Voice TTS Toggle
         if (elements.voiceToggleBtn) {
             elements.voiceToggleBtn.addEventListener('click', () => {
-                state.voiceEnabled = !state.voiceEnabled;
-                if (!state.voiceEnabled) stopSpeakingVoice();
+                let newState = false;
+                if (window.voiceService) {
+                    newState = window.voiceService.toggleVoice();
+                } else {
+                    state.voiceEnabled = !state.voiceEnabled;
+                    newState = state.voiceEnabled;
+                    if (!newState) stopSpeakingVoice();
+                    localStorage.setItem('shivi_voice_enabled', newState ? 'true' : 'false');
+                }
+                state.voiceEnabled = newState;
                 saveState();
                 updateVoiceIcon();
                 playSound('click');
-                showToast(state.voiceEnabled ? 'Voice responses turned ON' : 'Voice responses turned OFF', state.voiceEnabled ? 'volume-2' : 'volume-x');
+                showToast(newState ? 'Voice readout turned ON' : 'Voice readout turned OFF', newState ? 'volume-2' : 'volume-x');
             });
         }
 
@@ -8311,6 +8578,14 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
             // Mount event listeners first so UI is immediately responsive
             initEventListeners();
             handleInputChange();
+
+            // Sync with Real-Time Voice Service
+            if (window.voiceService) {
+                window.voiceService.subscribe((vState) => {
+                    updateSpeakingIndicatorUI(vState.isSpeaking, vState.currentlySpeakingMsgId);
+                    updateVoiceIcon();
+                });
+            }
 
             // Restore user authentication session & saved application state
             await Auth.checkSession();

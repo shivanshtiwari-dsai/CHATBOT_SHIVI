@@ -502,7 +502,7 @@ def execute_builtin_engine(query: str, persona: str = "companion", knowledge_con
 # ---------------------------------------------------------------------------
 # Multi-Provider AI Callers (Async)
 # ---------------------------------------------------------------------------
-async def call_groq(api_key: str, model: str, system_prompt: str, user_msg: str, history: List[Dict[str, Any]]) -> str:
+async def call_groq(api_key: str, model: str, system_prompt: str, user_msg: str, history: List[Dict[str, Any]], options: Optional[Dict[str, Any]] = None) -> str:
     target_model = model or "qwen/qwen3.8-27b"
     if not target_model or "llama" in target_model.lower():
         target_model = "qwen/qwen3.8-27b"
@@ -512,6 +512,7 @@ async def call_groq(api_key: str, model: str, system_prompt: str, user_msg: str,
             messages.append({"role": h.get("role", "user"), "content": h["content"]})
     messages.append({"role": "user", "content": user_msg})
 
+    max_tok = (options or {}).get("max_tokens", 4096)
     assert http_client is not None
     resp = await http_client.post(
         "https://api.groq.com/openai/v1/chat/completions",
@@ -520,9 +521,9 @@ async def call_groq(api_key: str, model: str, system_prompt: str, user_msg: str,
             "model": target_model,
             "messages": messages,
             "temperature": 0.6,
-            "max_tokens": 4096
+            "max_tokens": max_tok
         },
-        timeout=25.0
+        timeout=35.0
     )
     if resp.status_code != 200:
         err_msg = resp.text
@@ -537,7 +538,7 @@ async def call_groq(api_key: str, model: str, system_prompt: str, user_msg: str,
     answer = (msg.get("content") or "").strip() or (msg.get("reasoning") or "").strip()
     return answer
 
-async def call_openai(api_key: str, model: str, system_prompt: str, user_msg: str, history: List[Dict[str, Any]]) -> str:
+async def call_openai(api_key: str, model: str, system_prompt: str, user_msg: str, history: List[Dict[str, Any]], options: Optional[Dict[str, Any]] = None) -> str:
     target_model = model or "gpt-4o-mini"
     messages = [{"role": "system", "content": system_prompt}]
     for h in history[-8:]:
@@ -545,6 +546,7 @@ async def call_openai(api_key: str, model: str, system_prompt: str, user_msg: st
             messages.append({"role": h.get("role", "user"), "content": h["content"]})
     messages.append({"role": "user", "content": user_msg})
 
+    max_tok = (options or {}).get("max_tokens", 2500)
     assert http_client is not None
     resp = await http_client.post(
         "https://api.openai.com/v1/chat/completions",
@@ -553,9 +555,9 @@ async def call_openai(api_key: str, model: str, system_prompt: str, user_msg: st
             "model": target_model,
             "messages": messages,
             "temperature": 0.7,
-            "max_tokens": 2500
+            "max_tokens": max_tok
         },
-        timeout=25.0
+        timeout=35.0
     )
     if resp.status_code != 200:
         err_msg = resp.text
@@ -568,7 +570,7 @@ async def call_openai(api_key: str, model: str, system_prompt: str, user_msg: st
     data = resp.json()
     return data["choices"][0]["message"]["content"].strip()
 
-async def call_openrouter(api_key: str, model: str, system_prompt: str, user_msg: str, history: List[Dict[str, Any]]) -> str:
+async def call_openrouter(api_key: str, model: str, system_prompt: str, user_msg: str, history: List[Dict[str, Any]], options: Optional[Dict[str, Any]] = None) -> str:
     target_model = model or "qwen/qwen3.8-27b:free"
     messages = [{"role": "system", "content": system_prompt}]
     for h in history[-8:]:
@@ -576,6 +578,7 @@ async def call_openrouter(api_key: str, model: str, system_prompt: str, user_msg
             messages.append({"role": h.get("role", "user"), "content": h["content"]})
     messages.append({"role": "user", "content": user_msg})
 
+    max_tok = (options or {}).get("max_tokens", 2500)
     assert http_client is not None
     resp = await http_client.post(
         "https://openrouter.ai/api/v1/chat/completions",
@@ -588,9 +591,9 @@ async def call_openrouter(api_key: str, model: str, system_prompt: str, user_msg
             "model": target_model,
             "messages": messages,
             "temperature": 0.7,
-            "max_tokens": 2500
+            "max_tokens": max_tok
         },
-        timeout=25.0
+        timeout=35.0
     )
     if resp.status_code != 200:
         err_msg = resp.text
@@ -603,7 +606,7 @@ async def call_openrouter(api_key: str, model: str, system_prompt: str, user_msg
     data = resp.json()
     return data["choices"][0]["message"]["content"].strip()
 
-async def call_gemini(api_key: str, model: str, system_prompt: str, user_msg: str, history: List[Dict[str, Any]]) -> str:
+async def call_gemini(api_key: str, model: str, system_prompt: str, user_msg: str, history: List[Dict[str, Any]], options: Optional[Dict[str, Any]] = None) -> str:
     target_model = model or "gemini-1.5-flash"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={api_key}"
 
@@ -616,15 +619,16 @@ async def call_gemini(api_key: str, model: str, system_prompt: str, user_msg: st
             })
     contents.append({"role": "user", "parts": [{"text": user_msg}]})
 
+    max_tok = (options or {}).get("max_tokens", 2500)
     payload: Dict[str, Any] = {
         "contents": contents,
-        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2500}
+        "generationConfig": {"temperature": 0.7, "maxOutputTokens": max_tok}
     }
     if system_prompt:
         payload["systemInstruction"] = {"parts": [{"text": system_prompt}]}
 
     assert http_client is not None
-    resp = await http_client.post(url, json=payload, timeout=25.0)
+    resp = await http_client.post(url, json=payload, timeout=35.0)
     if resp.status_code != 200:
         err_msg = resp.text
         try:
@@ -869,12 +873,15 @@ async def chat_endpoint(req: ChatRequest):
         slide_match = re.search(r"(\d+)\s*(?:slides?|slide deck)", user_msg, re.IGNORECASE)
         if slide_match:
             try:
-                slide_count = max(3, min(15, int(slide_match.group(1))))
+                slide_count = max(5, min(20, int(slide_match.group(1))))
             except Exception:
                 pass
-
+            
         if is_ppt_slash:
             topic = re.sub(r"^/(ppt|presentation|slides|deck)\s+", "", user_msg, flags=re.IGNORECASE).strip()
+            topic = re.sub(r"(?:^|\s)(?:(\d+)\s*(?:slides?|slide deck)|(?:on|about|for)\s+(\d+)\s*(?:slides?|slide deck))\s*(?:on|about|for)?\s*", " ", topic, flags=re.IGNORECASE)
+            topic = re.sub(r"\s*(?:on|about|for)?\s*(\d+)\s*(?:slides?|slide deck)\s*$", "", topic, flags=re.IGNORECASE)
+            topic = re.sub(r"^(?:on|about|for)\s+", "", topic, flags=re.IGNORECASE).strip()
         else:
             topic = re.sub(r"(?:create|make|generate|build|draft|prepare)\s+(?:a\s+)?(?:(\d+)[ -]slide\s+)?(?:presentation|ppt|powerpoint|slide deck|slides)\s+(?:on|about|for)\s+", "", user_msg, flags=re.IGNORECASE)
             topic = re.sub(r"(?:presentation|ppt|powerpoint|slides)\s+(?:on|about|for)\s+", "", topic, flags=re.IGNORECASE)
@@ -1079,286 +1086,571 @@ async def generate_image_endpoint(req: ImageRequest, background_tasks: Backgroun
 # ---------------------------------------------------------------------------
 # API: Presentation Generator (.pptx Outline & Structure)
 # ---------------------------------------------------------------------------
-def normalize_presentation_deck(deck: dict, topic: str = "Executive Presentation", fallback_count: int = 6) -> dict:
-    clean_topic = (topic or "Topic Analysis").strip()
-    deck_title = deck.get("deck_title") or deck.get("title") or f"{clean_topic}: Deep Keynote"
-    theme = deck.get("theme") or "dark_modern"
+
+def hash_code(s: str) -> int:
+    h = 0
+    s_str = str(s or "")
+    for ch in s_str:
+        h = ((h << 5) - h + ord(ch)) & 0xFFFFFFFF
+    if h >= 0x80000000:
+        h -= 0x100000000
+    return h
+
+def build_contextual_slide_image_url(slide: dict, topic: str, index: int) -> str:
+    key_subject = re.sub(r'[^a-zA-Z0-9 ]', '', str(slide.get("title") or slide.get("slide_title") or "")).strip()
+    specific_context = str(slide.get("image_prompt") or slide.get("visual_description") or slide.get("image_search_query") or f"{topic} {key_subject}").strip()
+    specific_context = re.sub(r'\b(abstract|surreal|geometric shapes|neon glow|digital wave|glowing swirls|3D data visualization|hologram)\b', '', specific_context, flags=re.IGNORECASE).strip()
+    if not specific_context:
+        specific_context = f"{topic} {key_subject}"
+
+    enhanced_prompt = f"{specific_context}, high resolution documentary photography, editorial photo, realistic lighting, 4k, hyper-detailed, clean sharp focus, authentic context"
+    seed = abs(hash_code(f"{topic}_slide_{index}"))
+    safe_encoded = urllib.parse.quote(enhanced_prompt)
+    return f"https://image.pollinations.ai/prompt/{safe_encoded}?width=900&height=550&nologo=true&seed=${seed}"
+
+def repair_truncated_json(json_str: str) -> Optional[dict]:
+    if not json_str or not isinstance(json_str, str):
+        return None
+    text = re.sub(r'```(?:json)?', '', json_str, flags=re.IGNORECASE).replace('```', '').strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    slides_index = text.find('"slides"')
+    if slides_index == -1:
+        return None
+
+    last_object_close = text.rfind('}')
+    if last_object_close > slides_index:
+        candidate = text[:last_object_close + 1].strip()
+        if candidate.endswith(','):
+            candidate = candidate[:-1].strip()
+        if not candidate.endswith(']'):
+            candidate += '\n  ]'
+        if not candidate.endswith('}'):
+            candidate += '\n}'
+        try:
+            return json.loads(candidate)
+        except Exception as e:
+            print(f"[Truncated JSON Recovery Failed]: {e}")
+    return None
+
+def normalize_presentation_deck(deck: dict, topic: str = "Executive Presentation", fallback_count: int = 5) -> dict:
+    target_count = min(20, max(5, int(fallback_count) if (fallback_count and str(fallback_count).isdigit()) else 5))
+    clean_topic = (topic or "Strategic Initiative").strip()
+
+    if not deck or not isinstance(deck, dict):
+        return generate_rich_fallback_deck_py(clean_topic, target_count)
+
+    raw_title = deck.get("deck_title") or deck.get("title") or (f"{clean_topic}: Executive Masterclass" if clean_topic else "Keynote Presentation")
+    deck_title = str(raw_title).strip().strip('"').strip("'")
+    theme = str(deck.get("theme") or "dark_modern").lower()
     raw_slides = deck.get("slides") or []
-    
+
+    if not isinstance(raw_slides, list) or len(raw_slides) == 0:
+        return generate_rich_fallback_deck_py(clean_topic, target_count, theme)
+
     normalized_slides = []
-    metric_defaults = [
-        {"value": "Tier-1", "caption": f"Core domain standard for {clean_topic}"},
-        {"value": "99.4%", "caption": f"Benchmark precision in verified {clean_topic} frameworks"},
-        {"value": "3.4x", "caption": f"Throughput & comprehension multiplier for {clean_topic}"},
-        {"value": "Primary", "caption": f"Decisive structural pillar in {clean_topic}"},
-        {"value": "< 20ms", "caption": f"Execution latency benchmark for {clean_topic}"},
-        {"value": "Verified", "caption": f"Empirical validation standard for {clean_topic}"}
-    ]
-    
+    total_raw = len(raw_slides)
+
     for idx, s in enumerate(raw_slides):
         if not isinstance(s, dict):
             continue
-        raw_layout = str(s.get("layout") or s.get("layout_type") or "").lower()
-        if idx == 0 or raw_layout == "title":
-            layout = "title"
-        elif raw_layout in ["split_image_content", "image_split", "visual_split"] or s.get("image_prompt") or s.get("visual_prompt") or s.get("image_keyword"):
-            layout = "split_image_content"
-        elif raw_layout in ["metric_split", "hero_stat", "split_insight", "comparison"]:
-            layout = "metric_split"
-        else:
-            layout = "card_grid"
-            
-        badge = str(s.get("badge") or ("FOUNDATIONAL ANALYSIS" if idx == 0 else f"STRATEGIC PILLAR 0{idx + 1}")).upper()
-        slide_title = str(s.get("slide_title") or s.get("title") or f"{clean_topic}: Core Mechanics & Insight")
-        subtitle = str(s.get("subtitle") or "")
-        
-        cards = []
-        raw_cards = s.get("cards_or_points") or s.get("content_blocks")
-        if raw_cards and isinstance(raw_cards, list):
-            for c_idx, c in enumerate(raw_cards):
+        slide_num = idx + 1
+
+        # 1. Layout Type
+        raw_layout = str(s.get("layout_type") or s.get("layout") or "").lower()
+        layout_type = "title_hero" if (idx == 0 or "title" in raw_layout) else "split_image_content"
+
+        # 2. Category / Kicker
+        default_cat = "EXECUTIVE BRIEFING" if idx == 0 else ("STRATEGIC OBJECTIVE" if idx == 1 else ("STRATEGIC ROADMAP" if idx == total_raw - 1 else f"CORE PILLAR 0{idx}"))
+        category = str(s.get("category") or s.get("badge") or default_cat).upper().strip()
+
+        # 3. Slide Title & Subtitle
+        raw_st = str(s.get("title") or s.get("slide_title") or f"Strategic Pillar 0{slide_num}").strip()
+        slide_title = raw_st if raw_st != clean_topic else f"Strategic Insights: {clean_topic}"
+        subtitle = str(s.get("subtitle") or "").strip()
+
+        # 4. Objective
+        objective = str(s.get("objective") or s.get("speaker_notes") or "").strip()
+        if not objective:
+            if idx == 0:
+                objective = f"Deliver an authoritative, C-level executive briefing on {clean_topic}."
+            elif idx == 1:
+                objective = "Define measurable milestones and overcome existing structural bottlenecks."
+            elif idx == total_raw - 1:
+                objective = "Actionable implementation roadmap and immediate leadership mandate."
+            else:
+                objective = "Deep-dive analysis of core mechanisms and impact drivers."
+
+        # 5. Bullets
+        bullets = []
+        raw_bullets = s.get("bullets")
+        if raw_bullets and isinstance(raw_bullets, list):
+            for b in raw_bullets:
+                b_str = str(b).strip()
+                if b_str:
+                    bullets.append(b_str)
+        elif s.get("cards_or_points") and isinstance(s["cards_or_points"], list):
+            for c in s["cards_or_points"]:
                 if isinstance(c, dict):
-                    block_title = str(c.get("title") or c.get("label") or f"Core Mechanism 0{c_idx + 1}").strip().rstrip(":")
-                    block_desc = str(c.get("description") or c.get("detail") or "").strip()
-                    tag_val = str(c.get("tag") or c.get("metric") or c.get("takeaway") or c.get("tagline") or "").strip()
-                    cards.append({
-                        "title": block_title,
-                        "label": block_title,
-                        "description": block_desc,
-                        "detail": block_desc,
-                        "tag": tag_val or f"Insight 0{c_idx + 1}"
-                    })
+                    t = str(c.get("title") or c.get("label") or "Core Vector").strip()
+                    d = str(c.get("description") or c.get("detail") or "").strip()
+                    bullets.append(f"**{t}**: {d}")
                 elif isinstance(c, str) and c.strip():
-                    txt = c.strip()
-                    if ":" in txt:
-                        p1, p2 = txt.split(":", 1)
-                        h = p1.replace("*", "").strip()
-                        d = p2.strip()
-                        cards.append({"title": h, "label": h, "description": d, "detail": d, "tag": f"Pillar 0{c_idx + 1}"})
-                    else:
-                        cards.append({"title": f"Key Dynamic 0{c_idx + 1}", "label": f"Key Dynamic 0{c_idx + 1}", "description": txt, "detail": txt, "tag": f"Point 0{c_idx + 1}"})
-        elif s.get("bullets") and isinstance(s["bullets"], list):
-            for b_idx, b in enumerate(s["bullets"]):
-                txt = str(b).strip()
-                if ":" in txt:
-                    p1, p2 = txt.split(":", 1)
-                    h = p1.replace("*", "").strip()
-                    d = p2.strip()
-                    cards.append({"title": h, "label": h, "description": d, "detail": d, "tag": f"Focus 0{b_idx + 1}"})
-                else:
-                    cards.append({"title": f"Key Invariant 0{b_idx + 1}", "label": f"Key Invariant 0{b_idx + 1}", "description": txt, "detail": txt, "tag": f"Insight 0{b_idx + 1}"})
-                    
-        if not cards:
-            cards = [
-                {
-                    "title": "Deterministic Architectural Law",
-                    "label": "Deterministic Architectural Law",
-                    "description": f"The foundational architecture of {clean_topic} relies on structured, reproducible principles that dictate how elements interact under rigorous real-world conditions.",
-                    "detail": f"The foundational architecture of {clean_topic} relies on structured, reproducible principles that dictate how elements interact under rigorous real-world conditions.",
-                    "tag": "Theoretical Core"
-                },
-                {
-                    "title": "Empirical Dynamic Verification",
-                    "label": "Empirical Dynamic Verification",
-                    "description": f"Systematic observation and domain-specific evidence verifying the practical dynamics, stability boundaries, and performance benchmarks of {clean_topic}.",
-                    "detail": f"Systematic observation and domain-specific evidence verifying the practical dynamics, stability boundaries, and performance benchmarks of {clean_topic}.",
-                    "tag": "Verified Evidence"
-                },
-                {
-                    "title": "Systemic Operational Nuance",
-                    "label": "Systemic Operational Nuance",
-                    "description": f"Identifies edge cases, critical interdependencies, and operational trade-offs essential for production mastery and sustained excellence in {clean_topic}.",
-                    "detail": f"Identifies edge cases, critical interdependencies, and operational trade-offs essential for production mastery and sustained excellence in {clean_topic}.",
-                    "tag": "Critical Vector"
-                }
-            ]
-            
-        bullets = [f"**{c.get('title') or c.get('label')}:** {c.get('description') or c.get('detail')}" for c in cards]
-        
-        metric = s.get("highlight_metric") or s.get("metric_highlight")
-        if not metric or not isinstance(metric, dict) or not metric.get("value"):
-            metric = metric_defaults[idx % len(metric_defaults)]
-            
+                    bullets.append(c.strip())
+
+        if len(bullets) < 2:
+            if idx == 0:
+                bullets = [
+                    f"**Strategic Intent**: High-level vision outlining the transformative roadmap, architectural requirements, and deliverables for {clean_topic}.",
+                    "**Target Audience**: Designed for cross-functional stakeholders, engineering directors, and leadership demanding technical depth.",
+                    "**Presentation Standard**: Created with ShiviAI • Executive Keynote Widescreen Edition"
+                ]
+            elif idx == 1:
+                bullets = [
+                    "**Operational Efficiency**: Eliminating redundant manual workflows to reduce cycle times by up to 35% through automated orchestration.",
+                    "**System Reliability**: Implementing end-to-end telemetry and verification checks to safeguard uptime under peak traffic conditions.",
+                    "**Scalable Architecture**: Decoupling services to ensure modularity and predictable throughput as data density expands."
+                ]
+            elif idx == total_raw - 1:
+                bullets = [
+                    "**Phase 1 Kickoff**: Establish foundational telemetry baselines and spin up a dedicated cross-functional pilot team within 14 days.",
+                    "**Continuous Verification**: Implement automated benchmark validation gates to guarantee production SLA compliance.",
+                    "**Measurable ROI**: Accelerate capital efficiency through iterative feedback loops and compounding organizational leverage."
+                ]
+            else:
+                bullets = [
+                    "**Architectural Decoupling**: Partitioning execution pathways eliminates single points of failure while sustaining deterministic throughput.",
+                    "**Empirical Benchmarks**: Verified telemetry demonstrates a 3.4x compression in latency overhead across production workloads.",
+                    "**Adaptive Scaling**: Autonomous monitoring agents dynamically rebalance computational resources in response to traffic fluctuations."
+                ]
+
+        cards_or_points = []
+        for b_idx, b_text in enumerate(bullets):
+            match = re.match(r'^\*\*(.*?)\*\*:\s*(.*)$', b_text)
+            if match:
+                k_title = match.group(1).strip()
+                k_desc = match.group(2).strip()
+            elif ":" in b_text:
+                parts = b_text.split(":", 1)
+                k_title = parts[0].replace("*", "").strip()
+                k_desc = parts[1].join(":").strip() if len(parts) > 1 else ""
+            else:
+                k_title = f"Pillar 0{b_idx + 1}"
+                k_desc = b_text
+            cards_or_points.append({
+                "title": k_title,
+                "label": k_title,
+                "description": k_desc,
+                "detail": k_desc,
+                "tag": category or k_title
+            })
+
+        # 6. Contextual Photo Prompt & URLs via build_contextual_slide_image_url
+        img_url = build_contextual_slide_image_url(s, clean_topic, slide_num)
+        seed = abs(hash_code(f"{clean_topic}_slide_{slide_num}"))
+        fallback_url = f"https://picsum.photos/seed/{seed}/900/550"
+        key_subject = re.sub(r'[^a-zA-Z0-9 ]', '', str(s.get("title") or s.get("slide_title") or "")).strip()
+        specific_context = str(s.get("image_prompt") or s.get("visual_description") or s.get("image_search_query") or f"{clean_topic} {key_subject}").strip()
+        specific_context = re.sub(r'\b(abstract|surreal|geometric shapes|neon glow|digital wave|glowing swirls|3D data visualization|hologram)\b', '', specific_context, flags=re.IGNORECASE).strip() or f"{clean_topic} {key_subject}"
+        enhanced_prompt = f"{specific_context}, high resolution documentary photography, editorial photo, realistic lighting, 4k, hyper-detailed, clean sharp focus, authentic context"
+
+        # 7. Speaker notes talk-track
         speaker_notes = str(s.get("speaker_notes") or "").strip()
-        if not speaker_notes or len(speaker_notes) < 35:
-            primary_concept = cards[0].get("title") or cards[0].get("label") if cards else f"the core principles of {clean_topic}"
-            speaker_notes = (
-                f"In this section, we examine {slide_title}. "
-                f"The central focal point rests on {primary_concept}, where empirical data and domain mechanics demonstrate consistent, measurable outcomes. "
-                f"Presenter note: Emphasize how these structured insights directly address the foundational complexities of {clean_topic}."
-            )
-            
-        img_prompt = str(s.get("image_prompt") or s.get("visual_prompt") or s.get("image_keyword") or (f"{clean_topic} {slide_title} futuristic visualization 8k" if layout == "split_image_content" else "")).strip()
-        import urllib.parse
-        img_url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(img_prompt)}?width=800&height=600&nologo=true" if img_prompt else (s.get("image_url") or "")
+        if not speaker_notes or len(speaker_notes) < 30:
+            primary_lead = bullets[0].split(":")[0].replace("*", "") if bullets else "this pillar"
+            speaker_notes = f"In this slide, we examine {slide_title}. Notice how {primary_lead} establishes the baseline imperative for this domain. Our objective is clear: {objective}"
 
         normalized_slides.append({
-            "slide_number": idx + 1,
-            "layout": layout,
-            "layout_type": layout,
-            "badge": badge,
+            "slide_number": slide_num,
+            "layout_type": layout_type,
+            "layout": layout_type,
+            "category": category,
+            "badge": category,
+            "title": slide_title,
             "slide_title": slide_title,
             "subtitle": subtitle,
-            "image_prompt": img_prompt,
-            "visual_prompt": img_prompt,
-            "image_keyword": img_prompt,
+            "objective": objective,
+            "bullets": bullets[:4],
+            "cards_or_points": cards_or_points[:4],
+            "image_search_query": s.get("image_search_query") or f"{clean_topic} {slide_title}",
+            "visual_description": s.get("visual_description") or enhanced_prompt,
+            "image_prompt": enhanced_prompt,
             "image_url": img_url,
-            "cards_or_points": cards[:3],
-            "bullets": bullets,
+            "fallback_image_url": fallback_url,
             "highlight_metric": {
-                "value": str(metric.get("value", "Tier-1")),
-                "caption": str(metric.get("caption", f"Benchmark metric for {clean_topic}"))
+                "value": "Tier-1",
+                "caption": f"Standard for {clean_topic}"
             },
             "speaker_notes": speaker_notes
         })
-        
+
+    # If fewer slides were generated than requested, backfill from the rich 20-slide library
+    if len(normalized_slides) < target_count:
+        fallback = generate_rich_fallback_deck_py(clean_topic, target_count, theme)
+        fb_slides = fallback.get("slides") or []
+        for extra in fb_slides[len(normalized_slides):target_count]:
+            extra_copy = dict(extra)
+            extra_copy["slide_number"] = len(normalized_slides) + 1
+            normalized_slides.append(extra_copy)
+
     return {
         "deck_title": deck_title,
         "title": deck_title,
+        "topic": clean_topic,
         "theme": theme,
-        "topic": topic,
         "total_slides": len(normalized_slides),
-        "slides": normalized_slides
+        "slides": normalized_slides[:target_count]
     }
 
 def generate_rich_fallback_deck_py(topic: str, slide_count: Optional[int] = None, theme: str = "dark_modern") -> dict:
-    count = slide_count if (slide_count and slide_count > 0) else 6
-    clean_topic = topic.strip()
-    
-    templates = [
+    count = min(20, max(5, int(slide_count) if (slide_count and str(slide_count).isdigit()) else 5))
+    clean_topic = (topic or "").strip() or "Strategic Architecture"
+    deck_title = f"{clean_topic}: Executive Masterclass"
+
+    # 20 Comprehensive, Domain-Grounded Slide Blueprints
+    master_slides = [
         {
-            "layout": "hero_stat",
-            "badge": "EXECUTIVE THESIS",
-            "slide_title": f"The Strategic Imperative of {clean_topic}",
-            "subtitle": "Transformative paradigm shifts and competitive acceleration across modern markets",
-            "cards_or_points": [
-                {
-                    "label": "Macro Velocity Shift",
-                    "detail": f"Organizations deploying advanced {clean_topic} achieve a 3.4x compression in iteration cycles, outpacing legacy workflows and driving rapid market response."
-                },
-                {
-                    "label": "Defensibility & Scale",
-                    "detail": f"Building deep infrastructure around {clean_topic} establishes sustainable competitive moats through proprietary efficiencies and networked leverage."
-                }
+            "slide_number": 1,
+            "layout_type": "title_hero",
+            "category": "EXECUTIVE BRIEFING",
+            "title": f"Strategic Masterclass: {clean_topic}",
+            "subtitle": "Executive architecture, operational imperatives, and market dynamics",
+            "objective": f"Deliver an authoritative, end-to-end strategic briefing on {clean_topic} for cross-functional leadership.",
+            "bullets": [
+                f"**Strategic Intent**: High-level vision outlining the transformative roadmap, architectural requirements, and expected deliverables for {clean_topic}.",
+                "**Target Audience**: Designed for cross-functional stakeholders, engineering directors, and executive leadership demanding technical depth.",
+                "**Presentation Standard**: Created with ShiviAI • Executive Keynote Widescreen Edition"
             ],
-            "highlight_metric": {"value": "+148%", "caption": "Compound annual adoption rate across leading enterprise tiers"},
-            "speaker_notes": f"Welcome everyone. Today we are conducting an executive deep dive into {clean_topic}. The core premise of this deck is simple: {clean_topic} is no longer an optional experiment; it represents the defining structural inflection point for modern operations. As we examine the metrics, notice how early adopters are compounding their advantages across every operational vector."
+            "image_search_query": f"{clean_topic} executive briefing room modern enterprise headquarters",
+            "visual_description": f"Modern executive command briefing room with high-definition digital displays showcasing {clean_topic} operational data, cinematic corporate lighting",
+            "image_prompt": f"Modern executive command briefing room with high-definition digital displays showcasing {clean_topic} operational data, cinematic corporate lighting, documentary photography, 4k"
         },
         {
-            "layout": "split_image_content",
-            "badge": "ARCHITECTURAL TOPOLOGY",
-            "slide_title": f"Architectural Dynamics & Topology of {clean_topic}",
-            "subtitle": "Mission-critical structural drivers underpinning high-performance implementation",
-            "image_prompt": f"{clean_topic} detailed technical architecture visualization dark glowing cyan 8k",
-            "cards_or_points": [
-                {
-                    "label": "Unified Data Orchestration",
-                    "detail": "Eliminates informational silos by creating low-latency telemetry pipelines that feed directly into automated decision-making engines."
-                },
-                {
-                    "label": "Autonomous Feedback Loops",
-                    "detail": "Continuous monitoring systems adjust parameters in real time, reducing error margins by up to 76% without manual intervention."
-                }
+            "slide_number": 2,
+            "layout_type": "split_image_content",
+            "category": "STRATEGIC OBJECTIVE",
+            "title": "Core Objectives & System Bottlenecks",
+            "subtitle": "Navigating primary catalysts and resolving structural bottlenecks",
+            "objective": "Define measurable milestones and overcome existing structural bottlenecks across systems.",
+            "bullets": [
+                "**Operational Efficiency**: Eliminating redundant manual workflows to reduce cycle times by up to 35% through orchestrated pipelines.",
+                "**System Reliability**: Implementing end-to-end telemetry and automated verification guardrails to safeguard uptime and prevent failovers.",
+                "**Scalable Architecture**: Decoupling interdependent layers to ensure modular flexibility as compute demands and data density expand."
             ],
-            "highlight_metric": {"value": "99.4%", "caption": "Production reliability benchmark achieved across tier-1 environments"},
-            "speaker_notes": f"Turning to our architecture slide, this technical schematic illustrates the decoupled orchestration of {clean_topic}. Notice how autonomous feedback loops allow systems to self-correct in under 20 milliseconds, fundamentally safeguarding throughput."
+            "image_search_query": f"{clean_topic} mission critical operations center telemetry dashboards",
+            "visual_description": f"High-tech mission control room with engineers analyzing telemetry monitors and real-time operational status of {clean_topic}",
+            "image_prompt": f"High-tech mission control room with engineers analyzing telemetry monitors and real-time operational status of {clean_topic}, realistic ambient lighting, documentary photography, 4k"
         },
         {
-            "layout": "split_insight",
-            "badge": "STRATEGIC TRADE-OFFS",
-            "slide_title": "Navigating Bottlenecks vs. Breakthroughs",
-            "subtitle": "Comparative evaluation between legacy paradigms and next-generation frameworks",
-            "cards_or_points": [
-                {
-                    "label": "Legacy Inertia Constraints",
-                    "detail": "Traditional methods suffer from compounding latency, high maintenance overheads, and fragile point-to-point integrations."
-                },
-                {
-                    "label": "Next-Gen Breakthrough Vectors",
-                    "detail": f"Modern {clean_topic} architecture reduces cost-to-serve by 62% while enabling non-blocking asynchronous throughput at scale."
-                },
-                {
-                    "label": "Capital Efficiency Realignment",
-                    "detail": "Upfront capital expenditure translates into exponential operating leverage within the first two quarters of deployment."
-                }
+            "slide_number": 3,
+            "layout_type": "split_image_content",
+            "category": "HISTORICAL EVOLUTION",
+            "title": "Evolutionary Drivers & Paradigm Trajectory",
+            "subtitle": "From legacy methodologies to autonomous, high-throughput systems",
+            "objective": "Trace generational paradigm shifts establishing modern domain standards.",
+            "bullets": [
+                "**Foundational Precedents**: Early monolithic implementations established domain feasibility but suffered severe horizontal scaling friction.",
+                "**Decoupled Modernization**: Transition toward distributed micro-services eliminated single points of computational failure.",
+                "**Autonomous Convergence**: Current state-of-the-art leverages machine-speed feedback loops and predictive heuristics."
             ],
-            "highlight_metric": {"value": "4.2x", "caption": "Efficiency multiplier compared to standard legacy alternatives"},
-            "speaker_notes": f"Every strategic evolution involves trade-offs. On the left, we map the friction of legacy inertia—where technical debt slows innovation to a crawl. On the right, our modern model for {clean_topic} achieves a four-fold efficiency multiplier, unlocking immediate cash flow and operational bandwidth."
+            "image_search_query": f"{clean_topic} technical engineering laboratory hardware evolution",
+            "visual_description": f"Clean technical laboratory displaying the physical evolution of engineering hardware for {clean_topic}",
+            "image_prompt": f"Clean technical laboratory displaying the physical evolution of engineering hardware for {clean_topic}, macro photography, studio lighting, hyper-detailed"
         },
         {
-            "layout": "hero_stat",
-            "badge": "ECONOMIC IMPACT",
-            "slide_title": "Quantified Return & Value Realization",
-            "subtitle": "Tangible enterprise metrics and financial returns observed in production",
-            "cards_or_points": [
-                {
-                    "label": "Unit Economics Transformation",
-                    "detail": "Marginal cost per transaction drops asymptotically as volume increases, driving sustained gross margin expansion."
-                },
-                {
-                    "label": "Risk Mitigation Vector",
-                    "detail": "Automated compliance guardrails and predictive analytics reduce downtime events and security vulnerabilities by 84%."
-                }
+            "slide_number": 4,
+            "layout_type": "split_image_content",
+            "category": "SYSTEM ARCHITECTURE",
+            "title": "Core Architecture & Technical Topology",
+            "subtitle": "Underlying invariants, execution paths, and fault-tolerant topologies",
+            "objective": "Demystify the foundational mechanics driving deterministic performance in production.",
+            "bullets": [
+                "**Decoupled Orchestration**: Distributed state machines isolate computational stages to maintain deterministic latency boundaries across concurrent threads.",
+                "**Autonomous Telemetry**: Continuous observability agents monitor throughput gradients and dynamically rebalance cluster workloads in real time.",
+                "**Fault Isolation**: Partitioning critical services prevents cascading node degradation and ensures resilient, non-blocking fallback mechanisms."
             ],
-            "highlight_metric": {"value": "$3.8M", "caption": "Average annualized cost avoidance in enterprise deployments"},
-            "speaker_notes": f"Here we address the balance sheet. The financial justification for {clean_topic} is overwhelming. By transforming unit economics from linear costs to sub-linear marginal costs, enterprise organizations capture nearly four million dollars in annual efficiency gains while elevating system availability."
+            "image_search_query": f"{clean_topic} enterprise datacenter server corridor fiber-optic cabling",
+            "visual_description": f"Enterprise datacenter server corridor with glowing cable management and high-density compute blades for {clean_topic}",
+            "image_prompt": f"Enterprise datacenter server corridor with glowing cable management and high-density compute blades for {clean_topic}, realistic lighting, documentary photography, 4k"
         },
         {
-            "layout": "process_flow",
-            "badge": "EXECUTION TIMELINE",
-            "slide_title": "Phased Implementation & Rollout Roadmap",
-            "subtitle": "A disciplined, milestone-driven framework for rapid end-to-end deployment",
-            "cards_or_points": [
-                {
-                    "label": "Phase 1: Pilot & Discovery (Weeks 1-4)",
-                    "detail": f"Baseline auditing, telemetry setup, and validation of core hypotheses across high-yield test vectors in {clean_topic}."
-                },
-                {
-                    "label": "Phase 2: Scale & Orchestration (Weeks 5-10)",
-                    "detail": "Full cluster deployment, API gateway routing, and enterprise-wide staff enablement sessions."
-                },
-                {
-                    "label": "Phase 3: Autonomous Optimization (Weeks 11+)",
-                    "detail": "Self-healing workflows, custom fine-tuning, and executive KPI dashboard integration."
-                }
+            "slide_number": 5,
+            "layout_type": "split_image_content",
+            "category": "HARDWARE & COMPUTE",
+            "title": "Hardware Topology & Compute Substrates",
+            "subtitle": "Provisioning resilient node capacity, bare-metal clusters, and bandwidth",
+            "objective": "Specify physical infrastructure requirements supporting production workloads.",
+            "bullets": [
+                "**Compute Acceleration**: Utilizing specialized accelerator clusters to compress training and execution latency curves by over 60%.",
+                "**Memory Bandwidth**: High-throughput interconnect fabrics eliminate memory bottlenecks during intensive concurrent analytical queries.",
+                "**Thermal Management**: Precision cooling infrastructure preserves sustained peak clock speeds across dense computational chassis."
             ],
-            "highlight_metric": {"value": "< 90 Days", "caption": "Total timeline from initial kickoff to enterprise production status"},
-            "speaker_notes": f"Execution requires clarity. This three-stage rollout roadmap ensures zero operational disruption. In the first four weeks, we establish telemetry and prove out the core pilot. By day ninety, the entire pipeline is self-optimizing and delivering measurable ROI."
+            "image_search_query": f"{clean_topic} semiconductor cleanroom processor microchip inspection",
+            "visual_description": f"Semiconductor cleanroom technician inspecting silicon processor wafer and compute hardware for {clean_topic}",
+            "image_prompt": f"Semiconductor cleanroom technician inspecting silicon processor wafer and compute hardware for {clean_topic}, clean sharp focus, editorial photography, 4k"
         },
         {
-            "layout": "conclusion",
-            "badge": "EXECUTIVE MANDATE",
-            "slide_title": "The Path Forward: Leadership Mandate",
-            "subtitle": "Strategic recommendations to capture enduring first-mover advantage",
-            "cards_or_points": [
-                {
-                    "label": "Form Dedicated Tiger Team",
-                    "detail": f"Assemble a cross-functional taskforce across engineering and product to execute rapid prototyping on {clean_topic}."
-                },
-                {
-                    "label": "Targeted Infrastructure Allocation",
-                    "detail": "Allocate strategic capital toward high-throughput data infrastructure and automated verification tooling."
-                },
-                {
-                    "label": "Autonomous Execution Culture",
-                    "detail": "Incentivize speed-to-market and iterative learning cycles to permanently out-innovate industry incumbents."
-                }
+            "slide_number": 6,
+            "layout_type": "split_image_content",
+            "category": "DATA TOPOLOGY",
+            "title": "Data Ingestion & Event Stream Topology",
+            "subtitle": "Real-time telemetry, asynchronous brokers, and immutable ledgers",
+            "objective": "Establish high-throughput data processing pipelines with zero data loss.",
+            "bullets": [
+                "**Streaming Backpressure**: Reactive event brokers dynamically throttle ingestion rates to shield downstream storage engines from spike degradation.",
+                "**Schema Enforcement**: Strict serialization contracts reject malformed payloads at the perimeter to preserve pipeline data integrity.",
+                "**Immutable Audit Logs**: Append-only transaction journals provide mathematically verifiable audit trails for compliance forensics."
             ],
-            "highlight_metric": {"value": "Validated", "caption": "Immediate deployment pathway ready for enterprise execution"},
-            "speaker_notes": f"In conclusion, the window of opportunity is right now. Organizations that act boldly on {clean_topic} will define the standards of the next decade. Our immediate recommendation is to greenlight the Phase 1 pilot team today and begin capturing these competitive advantages immediately. Thank you."
+            "image_search_query": f"{clean_topic} high density fiber optic network patch bay",
+            "visual_description": "Macro documentary photograph of high-density fiber-optic network patch bay transmitting data in modern server facility",
+            "image_prompt": f"Macro documentary photograph of high-density fiber-optic network patch bay transmitting data in modern server facility for {clean_topic}, sharp focus, authentic context"
+        },
+        {
+            "slide_number": 7,
+            "layout_type": "split_image_content",
+            "category": "ALGORITHMIC FOUNDATIONS",
+            "title": "Algorithmic Models & Mathematical Invariants",
+            "subtitle": "Deterministic execution guarantees, state convergence, and optimization",
+            "objective": "Detail the algorithmic core governing deterministic decision boundaries.",
+            "bullets": [
+                "**Loss Convergence**: Advanced gradient optimization algorithms ensure rapid parameter convergence while avoiding local suboptimal plateaus.",
+                "**Probabilistic Calibration**: Rigorous confidence interval scoring prevents overconfident edge-case predictions during production anomalies.",
+                "**Dynamic Tuning**: Adaptive tuning heuristics modulate learning rates dynamically to safeguard training stability."
+            ],
+            "image_search_query": f"{clean_topic} software engineers whiteboard algorithmic formulations",
+            "visual_description": f"Software engineers collaborating at glass whiteboard discussing algorithmic formulas for {clean_topic}",
+            "image_prompt": f"Software engineers collaborating at glass whiteboard discussing algorithmic formulas for {clean_topic}, authentic startup office, realistic depth of field, 4k"
+        },
+        {
+            "slide_number": 8,
+            "layout_type": "split_image_content",
+            "category": "SECURITY & GOVERNANCE",
+            "title": "Security Posture & Cryptographic Boundaries",
+            "subtitle": "Mutual TLS, principle of least privilege, and real-time defense",
+            "objective": "Establish bulletproof perimeter defense and zero-trust authentication.",
+            "bullets": [
+                "**Cryptographic Identity**: Ephemeral mutual TLS tokens authenticate inter-service requests to eliminate static credential exploitation vectors.",
+                "**Least Privilege**: Role-based access boundaries restrict compute nodes to minimum necessary dataset partitions.",
+                "**Automated Isolation**: Behavioral anomaly sentinels quarantine compromised worker pods within sub-second detection windows."
+            ],
+            "image_search_query": f"{clean_topic} cybersecurity operations center analyst console",
+            "visual_description": f"Cybersecurity operations center analyst working in front of multi-monitor security consoles for {clean_topic}",
+            "image_prompt": f"Cybersecurity operations center analyst working in front of multi-monitor security consoles for {clean_topic}, moody office lighting, documentary photography, 4k"
+        },
+        {
+            "slide_number": 9,
+            "layout_type": "split_image_content",
+            "category": "PERFORMANCE BENCHMARKS",
+            "title": "Empirical Benchmarks & Throughput Profiles",
+            "subtitle": "Quantified latency profiles, scaling thresholds, and stress tolerances",
+            "objective": "Validate performance gains against standardized industry baseline metrics.",
+            "bullets": [
+                "**Latency Compression**: Sustained p99 latency reduced from 240ms to 38ms through kernel-bypass networking and memory pooling.",
+                "**Concurrent Scaling**: Verified linear throughput scaling up to 100,000 simultaneous concurrent sessions without degradation.",
+                "**Resource Footprint**: Memory usage optimization cuts hardware compute expenditures by up to 28% across identical transaction volumes."
+            ],
+            "image_search_query": f"{clean_topic} electronics laboratory oscilloscope benchmark diagnostic",
+            "visual_description": f"Electronics testing workbench with digital oscilloscopes and benchmark diagnostic instruments evaluating {clean_topic}",
+            "image_prompt": f"Electronics testing workbench with digital oscilloscopes and benchmark diagnostic instruments evaluating {clean_topic}, realistic lighting, documentary photography"
+        },
+        {
+            "slide_number": 10,
+            "layout_type": "split_image_content",
+            "category": "OPERATIONAL GOVERNANCE",
+            "title": "Operational Auditing & SLA Enforcement",
+            "subtitle": "Automated policy enforcement, compliance tracing, and audit resilience",
+            "objective": "Ensure continuous regulatory adherence and transparent service-level compliance.",
+            "bullets": [
+                "**Telemetry Ingestion**: Granular metrics are collected across all compute nodes to generate continuous regulatory compliance evidence.",
+                "**Automated Remediation**: Rule-based remediation controllers trigger proactive node recycling prior to threshold breaches.",
+                "**Transparent Reporting**: Real-time stakeholder dashboards expose uptime SLA metrics with complete cryptographic verification."
+            ],
+            "image_search_query": f"{clean_topic} corporate boardroom compliance audit tablets",
+            "visual_description": f"Corporate leadership team reviewing operational metrics and audit reports on conference table tablets for {clean_topic}",
+            "image_prompt": f"Corporate leadership team reviewing operational metrics and audit reports on conference table tablets for {clean_topic}, editorial corporate photo, 4k"
+        },
+        {
+            "slide_number": 11,
+            "layout_type": "split_image_content",
+            "category": "ECOSYSTEM INTEGRATION",
+            "title": "API Integrations & Interoperability Mesh",
+            "subtitle": "Decoupled contracts, cross-platform adapters, and third-party orchestration",
+            "objective": "Enable seamless interoperability with legacy enterprise environments.",
+            "bullets": [
+                "**Schema Translation**: Lightweight translation adapters convert legacy protocols into modern gRPC payloads with sub-millisecond overhead.",
+                "**Circuit Breaking**: Distributed circuit breakers isolate third-party upstream outages to prevent cascade deadlocks.",
+                "**Developer Ergonomics**: Comprehensive SDK libraries and automated sandbox generation accelerate partner integration timelines."
+            ],
+            "image_search_query": f"{clean_topic} software developer desk dual monitors code",
+            "visual_description": f"Software developer desk setup with dual monitors showing code and API integration schemas for {clean_topic}",
+            "image_prompt": f"Software developer desk setup with dual monitors showing code and API integration schemas for {clean_topic}, natural daylight, clean sharp focus, authentic context"
+        },
+        {
+            "slide_number": 12,
+            "layout_type": "split_image_content",
+            "category": "INDUSTRY VERTICALS",
+            "title": "Vertical Sector Applications & Deployment Profiles",
+            "subtitle": "Enterprise healthcare, financial, industrial, and retail operations",
+            "objective": "Showcase tailored domain adaptations across diverse market verticals.",
+            "bullets": [
+                "**Financial Systems**: Algorithmic risk profiling models identify anomalous fraudulent transactions in under 12 milliseconds.",
+                "**Healthcare Diagnostics**: High-fidelity multimodal ingestion accelerates medical imaging triage without compromising clinical diagnostic rigor.",
+                "**Industrial Manufacturing**: Real-time sensor telemetry predicts mechanical component fatigue weeks prior to catastrophic failure."
+            ],
+            "image_search_query": f"{clean_topic} automated robotic factory floor industrial operations",
+            "visual_description": f"Modern industrial factory floor with automated robotic manufacturing arms and monitoring screens powered by {clean_topic}",
+            "image_prompt": f"Modern industrial factory floor with automated robotic manufacturing arms and monitoring screens powered by {clean_topic}, documentary photography, 4k"
+        },
+        {
+            "slide_number": 13,
+            "layout_type": "split_image_content",
+            "category": "FIELD CASE STUDIES",
+            "title": "Production Case Studies & Measured Outcomes",
+            "subtitle": "Empirical deployment outcomes, migration friction, and measured gains",
+            "objective": "Analyze real-world enterprise deployments and validated return on investment.",
+            "bullets": [
+                "**Enterprise Rollout**: Global financial enterprise successfully migrated 45 legacy pipelines with zero unscheduled downtime.",
+                "**Quantified Throughput**: Post-migration telemetry confirmed a 3.4x surge in transactional capacity alongside a 40% compute cost reduction.",
+                "**Operator Feedback**: Engineering teams reported a 55% decline in on-call triage alarms following automated self-healing adoption."
+            ],
+            "image_search_query": f"{clean_topic} engineering technical team project review office",
+            "visual_description": f"Technical team gathered around monitor reviewing successful live production deployment for {clean_topic}",
+            "image_prompt": f"Technical team gathered around monitor reviewing successful live production deployment for {clean_topic}, natural office candid photography, 4k"
+        },
+        {
+            "slide_number": 14,
+            "layout_type": "split_image_content",
+            "category": "TECHNICAL CHALLENGES",
+            "title": "Architectural Bottlenecks & Critical Hazards",
+            "subtitle": "Concurrency contention, cold-start latency, and state desynchronization",
+            "objective": "Identify high-risk architectural failure modes before production scale.",
+            "bullets": [
+                "**Concurrency Contention**: Shared distributed database locks can induce catastrophic cascade starvation under asymmetric traffic spikes.",
+                "**Cold-Start Latency**: Initializing heavyweight containerized model instances introduces unacceptable p99 latency spikes if unmitigated.",
+                "**State Desynchronization**: Asynchronous replication across geographically separated datacenters risks transient split-brain inconsistencies."
+            ],
+            "image_search_query": f"{clean_topic} systems engineer diagnostic laptop server aisle",
+            "visual_description": f"Systems engineer with diagnostic laptop in server aisle debugging technical performance logs for {clean_topic}",
+            "image_prompt": f"Systems engineer with diagnostic laptop in server aisle debugging technical performance logs for {clean_topic}, realistic lighting, documentary photography"
+        },
+        {
+            "slide_number": 15,
+            "layout_type": "split_image_content",
+            "category": "RESILIENCE ENGINEERING",
+            "title": "Risk Mitigation & Disaster Recovery",
+            "subtitle": "Automated self-healing, multi-region replication, and graceful degradation",
+            "objective": "Construct defensive architectural guardrails ensuring uninterrupted business continuity.",
+            "bullets": [
+                "**Warm Pooling**: Pre-warmed container instances eliminate cold-start penalties by maintaining idle headroom during predicted spike intervals.",
+                "**Chaos Testing**: Automated fault injection simulations continuously validate failover orchestrations against unannounced node terminations.",
+                "**Multi-Region Quorum**: Raft-based consensus clusters span three independent availability zones to guarantee uninterrupted quorum availability."
+            ],
+            "image_search_query": f"{clean_topic} industrial backup power generators datacenter cooling",
+            "visual_description": f"Industrial redundant power and cooling backup systems at enterprise server facility for {clean_topic}",
+            "image_prompt": f"Industrial redundant power and cooling backup systems at enterprise server facility for {clean_topic}, industrial documentary photography, 4k"
+        },
+        {
+            "slide_number": 16,
+            "layout_type": "split_image_content",
+            "category": "CAPITAL EFFICIENCY",
+            "title": "Cost Optimization & Total Cost of Ownership",
+            "subtitle": "Unit economics, capital allocation efficiency, and infrastructure ROI",
+            "objective": "Structure sustainable infrastructure spending with predictable unit economics.",
+            "bullets": [
+                "**Spot Allocation**: Dynamic spot instance harvesting reduces auxiliary compute expenses by up to 52% for fault-tolerant batch workloads.",
+                "**Storage Tiering**: Automated data lifecycle rules migrate dormant historical telemetry to cold archival storage automatically.",
+                "**Compounding ROI**: Operational leverage allows transaction volume to scale 5x with less than 20% growth in infrastructure spend."
+            ],
+            "image_search_query": f"{clean_topic} executive reviewing financial cost graphs tablet",
+            "visual_description": f"Executive reviewing financial analytics and infrastructure cost graphs on modern tablet for {clean_topic}",
+            "image_prompt": f"Executive reviewing financial analytics and infrastructure cost graphs on modern tablet for {clean_topic}, sharp focus, editorial photo, 4k"
+        },
+        {
+            "slide_number": 17,
+            "layout_type": "split_image_content",
+            "category": "ORGANIZATIONAL MATURITY",
+            "title": "Cross-Functional Enablement & Tiger Teams",
+            "subtitle": "Engineering enablement, change management, and operational readiness",
+            "objective": "Equip internal engineering talent with requisite domain competencies.",
+            "bullets": [
+                "**Tiger Team Governance**: Dedicated SWAT engineering teams lead pilot implementations and codify organizational architectural playbooks.",
+                "**Continuous Upskilling**: Structured technical workshops ensure staff engineers master distributed state management paradigms.",
+                "**Internal Platform Hub**: Self-service developer portals streamline deployment onboarding and enforce organizational best practices."
+            ],
+            "image_search_query": f"{clean_topic} engineering teams collaborative technical classroom",
+            "visual_description": f"Engineering teams in modern collaborative tech classroom participating in technical training for {clean_topic}",
+            "image_prompt": f"Engineering teams in modern collaborative tech classroom participating in technical training for {clean_topic}, natural lighting, candid documentary photography"
+        },
+        {
+            "slide_number": 18,
+            "layout_type": "split_image_content",
+            "category": "EXECUTION TIMELINE",
+            "title": "Implementation Roadmap: Multi-Stage Horizons",
+            "subtitle": "Disciplined execution roadmap from discovery to autonomous scale",
+            "objective": "Establish a phased rollout timeline with clear accountability gates.",
+            "bullets": [
+                "**Phase 1 Kickoff (Weeks 1-4)**: Audit infrastructure baselines, establish telemetry probes, and assemble a cross-functional Tiger Team.",
+                "**Phase 2 Orchestration (Weeks 5-10)**: Deploy unified pipelines into staging, execute load simulations, and conduct operator training.",
+                "**Phase 3 Production Scale (Weeks 11+)**: Greenlight enterprise rollout with automated SLA compliance tracking and executive reporting."
+            ],
+            "image_search_query": f"{clean_topic} technical project roadmap planning wall kanban",
+            "visual_description": f"Technical project managers and engineers collaborating at project roadmap planning wall for {clean_topic}",
+            "image_prompt": f"Technical project managers and engineers collaborating at project roadmap planning wall for {clean_topic}, realistic lighting, documentary photography, 4k"
+        },
+        {
+            "slide_number": 19,
+            "layout_type": "split_image_content",
+            "category": "FUTURE HORIZON",
+            "title": "Next-Generation Horizons & Emerging Catalysts",
+            "subtitle": "Anticipated technical breakthroughs, paradigm evolution, and moats",
+            "objective": "Anticipate upcoming technological inflection points over a 3-5 year horizon.",
+            "bullets": [
+                "**Autonomous Agents**: Transition from reactive pipelines toward goal-directed autonomous agents operating within strict guardrails.",
+                "**Edge Compute Convergence**: Sub-millisecond localized inference capabilities shift computation closer to physical edge telemetry sources.",
+                "**Strategic Defensibility**: Establishing proprietary operational datasets creates compounding organizational competitive advantages."
+            ],
+            "image_search_query": f"{clean_topic} scientist research laboratory next-generation computing hardware",
+            "visual_description": f"Scientist in clean modern research laboratory working on next-generation computing hardware for {clean_topic}",
+            "image_prompt": f"Scientist in clean modern research laboratory working on next-generation computing hardware for {clean_topic}, realistic lighting, editorial photography, 4k"
+        },
+        {
+            "slide_number": 20,
+            "layout_type": "split_image_content",
+            "category": "STRATEGIC MANDATE",
+            "title": "Executive Mandate & Actionable Next Steps",
+            "subtitle": "Leadership directives, capital deployment decisions, and next steps",
+            "objective": "Deliver decisive executive takeaways and immediate organizational directives.",
+            "bullets": [
+                "**Immediate Mandate**: Greenlight Phase 1 foundational audit and charter the core implementation Tiger Team within 10 business days.",
+                "**Capital Allocation**: Earmark primary infrastructure budget to upgrade high-throughput telemetry pipelines and security perimeters.",
+                "**Sustained Momentum**: Establish bi-weekly executive steering reviews to guarantee milestone adherence and unblock dependencies."
+            ],
+            "image_search_query": f"{clean_topic} executive boardroom meeting strategic agreement handshake",
+            "visual_description": f"Executive boardroom meeting with corporate leaders finalizing strategic agreement for {clean_topic}",
+            "image_prompt": f"Executive boardroom meeting with corporate leaders finalizing strategic agreement for {clean_topic}, cinematic corporate lighting, documentary photography, 4k"
         }
     ]
-    
-    selected = templates[:count]
-    while len(selected) < count:
-        idx = len(selected)
-        t_clone = dict(templates[idx % len(templates)])
-        t_clone["slide_title"] = f"Strategic Vector {idx + 1}"
-        selected.append(t_clone)
-        
+
+    chosen_slides = []
+    if count <= 5:
+        chosen_slides = [master_slides[0], master_slides[1], master_slides[3], master_slides[11], master_slides[19]]
+    elif count >= 20:
+        chosen_slides = list(master_slides[:20])
+    else:
+        chosen_slides = list(master_slides[:count - 1])
+        chosen_slides.append(master_slides[19])
+
+    for i, sl in enumerate(chosen_slides):
+        sl["slide_number"] = i + 1
+
     return normalize_presentation_deck({
-        "deck_title": f"Executive Keynote: {clean_topic}",
+        "deck_title": deck_title,
+        "topic": clean_topic,
         "theme": theme,
-        "slides": selected
+        "slides": chosen_slides
     }, topic=clean_topic, fallback_count=count)
 
 def create_pptx_file_py(deck: dict) -> dict:
@@ -1469,346 +1761,178 @@ def create_pptx_file_py(deck: dict) -> dict:
         content_top = Inches(1.95)
         content_height = Inches(4.75)
 
-        # -------------------------------------------------------------------
-        # 1. Layout: HERO STAT (Apple Keynote Style Giant Metric + Cards)
-        # -------------------------------------------------------------------
-        if layout == "hero_stat":
-            # Left Hero Stat Card
-            stat_card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.8), content_top, Inches(4.6), content_height)
-            stat_card.fill.solid()
-            stat_card.fill.fore_color.rgb = card_bg_rgb
-            stat_card.line.color.rgb = card_border_rgb
-            stat_card.line.width = Pt(1.5)
-
-            # Metric Value
-            val_box = slide.shapes.add_textbox(Inches(1.1), Inches(2.4), Inches(4.0), Inches(1.5))
-            vp = val_box.text_frame.paragraphs[0]
-            vp.text = metric.get("value", "+148%")
-            vp.font.size = Pt(48)
-            vp.font.bold = True
-            vp.font.color.rgb = accent_rgb
-
-            # Metric Caption
-            cap_box = slide.shapes.add_textbox(Inches(1.1), Inches(3.9), Inches(4.0), Inches(0.9))
-            cap_f = cap_box.text_frame
-            cap_f.word_wrap = True
-            cp = cap_f.paragraphs[0]
-            cp.text = metric.get("caption", "Annualized industry growth benchmark")
-            cp.font.size = Pt(13)
-            cp.font.bold = True
-            cp.font.color.rgb = text_title_rgb
-
-            # Mini divider
-            div = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(1.1), Inches(4.9), Inches(3.8), Inches(0.02))
-            div.fill.solid()
-            div.fill.fore_color.rgb = card_border_rgb
-            div.line.color.rgb = card_border_rgb
-
-            # Left footer note
-            fn_box = slide.shapes.add_textbox(Inches(1.1), Inches(5.1), Inches(4.0), Inches(1.2))
-            fn_f = fn_box.text_frame
-            fn_f.word_wrap = True
-            fnp = fn_f.paragraphs[0]
-            fnp.text = f"Empirical benchmark reflecting operational acceleration across verified {deck_title} frameworks."
-            fnp.font.size = Pt(10.5)
-            fnp.font.color.rgb = text_sub_rgb
-
-            # Right Column: 2 Modular Concept Cards
-            num_cards = min(len(cards), 2)
-            c_h = Inches(2.25)
-            for c_idx in range(num_cards):
-                card_item = cards[c_idx]
-                c_y = content_top if c_idx == 0 else Inches(4.45)
-
-                rc = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(5.7), c_y, Inches(6.8), c_h)
-                rc.fill.solid()
-                rc.fill.fore_color.rgb = card_bg_rgb
-                rc.line.color.rgb = card_border_rgb
-                rc.line.width = Pt(1)
-
-                tb = slide.shapes.add_textbox(Inches(6.0), c_y + Inches(0.2), Inches(6.2), Inches(1.85))
-                tf = tb.text_frame
-                tf.word_wrap = True
-                
-                lp = tf.paragraphs[0]
-                lp.text = card_item.get("label", f"Strategic Concept {c_idx + 1}")
-                lp.font.size = Pt(16)
-                lp.font.bold = True
-                lp.font.color.rgb = accent_alt_rgb
-                lp.space_after = Pt(6)
-
-                dp = tf.add_paragraph()
-                dp.text = card_item.get("detail", "")
-                dp.font.size = Pt(13)
-                dp.font.color.rgb = text_body_rgb
+        content_top = Inches(1.85)
+        content_height = Inches(4.85)
+        col_w = Inches(5.65)
+        img_x = Inches(6.85)
 
         # -------------------------------------------------------------------
-        # Layout: SPLIT IMAGE & CONTENT (50% text cards left, 50% AI image right)
+        # 1. Slide 1: TITLE HERO LAYOUT
         # -------------------------------------------------------------------
-        elif layout == "split_image_content" or s.get("image_prompt") or s.get("image_url"):
-            col_w = Inches(5.65)
-            left_cards = cards[:2]
-            c_h = (content_height - Inches(0.25)) / 2
+        if idx == 0 or layout in ["title", "title_hero"]:
+            # Left Column: Strategic Summary, Objectives & Bullets
+            left_card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.8), content_top, col_w, content_height)
+            left_card.fill.solid()
+            left_card.fill.fore_color.rgb = card_bg_rgb
+            left_card.line.color.rgb = card_border_rgb
+            left_card.line.width = Pt(1)
 
-            for c_idx, card_item in enumerate(left_cards):
-                c_y = content_top + (c_idx * (c_h + Inches(0.25)))
-                sc = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.8), c_y, col_w, c_h)
+            tb_left = slide.shapes.add_textbox(Inches(1.05), content_top + Inches(0.2), col_w - Inches(0.5), content_height - Inches(0.4))
+            tf_left = tb_left.text_frame
+            tf_left.word_wrap = True
+
+            # Strategic Objective Callout
+            obj_text = s.get("objective") or f"Deliver an authoritative executive briefing on {deck_title}."
+            p_obj = tf_left.paragraphs[0]
+            p_obj.text = f"🎯 STRATEGIC OBJECTIVE:\n{obj_text}"
+            p_obj.font.size = Pt(11)
+            p_obj.font.bold = True
+            p_obj.font.color.rgb = accent_alt_rgb
+            p_obj.space_after = Pt(12)
+
+            # Bullets
+            bullets_list = s.get("bullets") or []
+            if not bullets_list and cards:
+                bullets_list = [f"**{c.get('title') or c.get('label') or 'Vector'}**: {c.get('description') or c.get('detail')}" for c in cards]
+
+            for b_item in bullets_list[:3]:
+                pb = tf_left.add_paragraph()
+                pb.space_after = Pt(8)
+                b_str = str(b_item).strip()
+                if ":" in b_str:
+                    parts = b_str.split(":", 1)
+                    k = parts[0].replace("*", "").strip()
+                    d = parts[1].strip()
+                    run1 = pb.add_run()
+                    run1.text = f"✦ {k}: "
+                    run1.font.bold = True
+                    run1.font.size = Pt(11.5)
+                    run1.font.color.rgb = accent_rgb
+
+                    run2 = pb.add_run()
+                    run2.text = d
+                    run2.font.size = Pt(11)
+                    run2.font.color.rgb = text_body_rgb
+                else:
+                    run = pb.add_run()
+                    run.text = f"✦ {b_str}"
+                    run.font.size = Pt(11)
+                    run.font.color.rgb = text_body_rgb
+
+            # Footer Tag
+            p_foot = tf_left.add_paragraph()
+            p_foot.text = "Created with ShiviAI • Executive Keynote Widescreen Edition"
+            p_foot.font.size = Pt(9.5)
+            p_foot.font.italic = True
+            p_foot.font.color.rgb = text_sub_rgb
+            p_foot.space_before = Pt(10)
+
+        # -------------------------------------------------------------------
+        # 2. Content Slides: SPLIT IMAGE & CONTENT LAYOUT (With 3-4 Bullets)
+        # -------------------------------------------------------------------
+        else:
+            bullets_list = s.get("bullets") or []
+            if not bullets_list and cards:
+                bullets_list = [f"**{c.get('title') or c.get('label') or 'Pillar'}**: {c.get('description') or c.get('detail')}" for c in cards]
+
+            num_bullets = min(max(len(bullets_list), 2), 4)
+            card_gap = Inches(0.12)
+            card_h = (content_height - (card_gap * (num_bullets - 1))) / num_bullets
+
+            for b_idx in range(num_bullets):
+                b_str = bullets_list[b_idx] if b_idx < len(bullets_list) else bullets_list[-1]
+                cy = content_top + (b_idx * (card_h + card_gap))
+
+                sc = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.8), cy, col_w, card_h)
                 sc.fill.solid()
                 sc.fill.fore_color.rgb = card_bg_rgb
                 sc.line.color.rgb = card_border_rgb
                 sc.line.width = Pt(1)
 
-                strip = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(1.05), c_y + Inches(0.2), Inches(0.9), Inches(0.05))
+                # Accent strip on left of card
+                strip = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0.8), cy + Inches(0.08), Inches(0.06), card_h - Inches(0.16))
                 strip.fill.solid()
-                strip_col = accent_rgb if c_idx == 0 else accent_alt_rgb
+                strip_col = accent_rgb if b_idx % 2 == 0 else accent_alt_rgb
                 strip.fill.fore_color.rgb = strip_col
                 strip.line.color.rgb = strip_col
 
-                tb = slide.shapes.add_textbox(Inches(1.05), c_y + Inches(0.35), col_w - Inches(0.5), c_h - Inches(0.45))
-                tf = tb.text_frame
-                tf.word_wrap = True
+                tb_b = slide.shapes.add_textbox(Inches(0.98), cy + Inches(0.06), col_w - Inches(0.3), card_h - Inches(0.12))
+                tf_b = tb_b.text_frame
+                tf_b.word_wrap = True
 
-                lp = tf.paragraphs[0]
-                lp.text = card_item.get("title") or card_item.get("label", f"Strategic Pillar {c_idx + 1}")
-                lp.font.size = Pt(15)
-                lp.font.bold = True
-                lp.font.color.rgb = text_title_rgb
-                lp.space_after = Pt(4)
+                pb = tf_b.paragraphs[0]
+                b_text = str(b_str).strip()
+                if ":" in b_text:
+                    parts = b_text.split(":", 1)
+                    k = parts[0].replace("*", "").strip()
+                    d = parts[1].strip()
 
-                dp = tf.add_paragraph()
-                dp.text = card_item.get("description") or card_item.get("detail", "")
-                dp.font.size = Pt(11.5)
-                dp.font.color.rgb = text_body_rgb
+                    run1 = pb.add_run()
+                    run1.text = f"{k}: "
+                    run1.font.bold = True
+                    run1.font.size = Pt(11.5) if num_bullets <= 3 else Pt(10.5)
+                    run1.font.color.rgb = accent_rgb if b_idx % 2 == 0 else accent_alt_rgb
 
-            # Right column: Image container + Pollinations AI Image
-            img_x = Inches(6.85)
-            img_box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, img_x, content_top, col_w, content_height)
-            img_box.fill.solid()
-            img_box.fill.fore_color.rgb = card_bg_rgb
-            img_box.line.color.rgb = accent_rgb
-            img_box.line.width = Pt(1.2)
+                    run2 = pb.add_run()
+                    run2.text = d
+                    run2.font.size = Pt(11) if num_bullets <= 3 else Pt(10)
+                    run2.font.color.rgb = text_body_rgb
+                else:
+                    run = pb.add_run()
+                    run.text = b_text
+                    run.font.size = Pt(11) if num_bullets <= 3 else Pt(10)
+                    run.font.color.rgb = text_body_rgb
 
-            img_prompt = s.get("image_prompt") or s.get("visual_prompt") or s.get("image_keyword") or f"{deck_title} {slide_title}"
-            import urllib.parse
-            img_url = s.get("image_url") or f"https://image.pollinations.ai/prompt/{urllib.parse.quote(img_prompt)}?width=800&height=600&nologo=true"
+        # -------------------------------------------------------------------
+        # Universal Right Column: Dynamic AI Image for Every Slide
+        # -------------------------------------------------------------------
+        img_box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, img_x, content_top, col_w, content_height)
+        img_box.fill.solid()
+        img_box.fill.fore_color.rgb = card_bg_rgb
+        img_box.line.color.rgb = accent_rgb
+        img_box.line.width = Pt(1.2)
 
-            image_placed = False
+        img_prompt = s.get("image_prompt") or s.get("visual_prompt") or f"{deck_title} {slide_title} 8k cinematic"
+        import urllib.parse
+        img_url = s.get("image_url") or f"https://image.pollinations.ai/prompt/{urllib.parse.quote(img_prompt)}?width=1200&height=800&nologo=true&seed={idx * 137 + 101}"
+        fallback_url = s.get("fallback_image_url") or f"https://picsum.photos/seed/{urllib.parse.quote(deck_title + str(idx))}/1200/800"
+
+        image_placed = False
+        import urllib.request
+        import io
+        for target_url in [img_url, fallback_url]:
+            if image_placed:
+                break
             try:
-                import urllib.request
-                import io
-                req = urllib.request.Request(img_url, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=5) as response:
+                req = urllib.request.Request(target_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=4) as response:
                     img_data = response.read()
                     img_stream = io.BytesIO(img_data)
                     slide.shapes.add_picture(img_stream, img_x + Inches(0.08), content_top + Inches(0.08), col_w - Inches(0.16), content_height - Inches(0.5))
                     image_placed = True
             except Exception as img_err:
-                print(f"[python-pptx image download warning]: {img_err}")
+                pass
 
-            if not image_placed:
-                # Text fallback placeholder inside container
-                tb_ph = slide.shapes.add_textbox(img_x + Inches(0.3), content_top + Inches(1.5), col_w - Inches(0.6), Inches(2.0))
-                tf_ph = tb_ph.text_frame
-                tf_ph.word_wrap = True
-                ph_p = tf_ph.paragraphs[0]
-                ph_p.text = f"✨ Visual Architecture Schematic\n\nPrompt: {img_prompt}"
-                ph_p.font.size = Pt(12)
-                ph_p.font.color.rgb = text_sub_rgb
-                ph_p.alignment = PP_ALIGN.CENTER
+        if not image_placed:
+            tb_ph = slide.shapes.add_textbox(img_x + Inches(0.3), content_top + Inches(1.5), col_w - Inches(0.6), Inches(2.0))
+            tf_ph = tb_ph.text_frame
+            tf_ph.word_wrap = True
+            ph_p = tf_ph.paragraphs[0]
+            ph_p.text = f"✨ Dynamic AI Visual Concept\n\nPrompt: {img_prompt}"
+            ph_p.font.size = Pt(12)
+            ph_p.font.color.rgb = text_sub_rgb
+            ph_p.alignment = PP_ALIGN.CENTER
 
-            # Prompt caption pill at bottom
-            tb_lbl = slide.shapes.add_textbox(img_x + Inches(0.1), content_top + content_height - Inches(0.38), col_w - Inches(0.2), Inches(0.32))
-            tf_lbl = tb_lbl.text_frame
-            lp_lbl = tf_lbl.paragraphs[0]
-            lp_lbl.text = f"✦ AI Visual: {img_prompt[:45]}..."
-            lp_lbl.font.size = Pt(9)
-            lp_lbl.font.italic = True
-            lp_lbl.font.color.rgb = text_sub_rgb
-            lp_lbl.alignment = PP_ALIGN.CENTER
-
-        # -------------------------------------------------------------------
-        # 2. Layout: CARD GRID (Pitch.com 3-Card Modular Grid)
-        # -------------------------------------------------------------------
-        elif layout == "card_grid":
-            num_cards = min(max(len(cards), 2), 3)
-            col_w = Inches(3.68) if num_cards == 3 else Inches(5.65)
-            gap = Inches(0.35)
-
-            for c_idx in range(num_cards):
-                card_item = cards[c_idx] if c_idx < len(cards) else cards[-1]
-                c_x = Inches(0.8) + (c_idx * (col_w + gap))
-
-                gc = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, c_x, content_top, col_w, content_height)
-                gc.fill.solid()
-                gc.fill.fore_color.rgb = card_bg_rgb
-                gc.line.color.rgb = card_border_rgb
-                gc.line.width = Pt(1)
-
-                # Card Top Indicator Strip
-                strip = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, c_x + Inches(0.4), content_top + Inches(0.4), Inches(0.8), Inches(0.06))
-                strip.fill.solid()
-                strip_color = accent_rgb if c_idx == 0 else (accent_alt_rgb if c_idx == 1 else RGBColor(168, 85, 247))
-                strip.fill.fore_color.rgb = strip_color
-                strip.line.color.rgb = strip_color
-
-                tb = slide.shapes.add_textbox(c_x + Inches(0.35), content_top + Inches(0.65), col_w - Inches(0.7), content_height - Inches(0.9))
-                tf = tb.text_frame
-                tf.word_wrap = True
-
-                lp = tf.paragraphs[0]
-                lp.text = card_item.get("label", f"Pillar {c_idx + 1}")
-                lp.font.size = Pt(16.5)
-                lp.font.bold = True
-                lp.font.color.rgb = text_title_rgb
-                lp.space_after = Pt(10)
-
-                dp = tf.add_paragraph()
-                dp.text = card_item.get("detail", "")
-                dp.font.size = Pt(13)
-                dp.font.color.rgb = text_body_rgb
-
-        # -------------------------------------------------------------------
-        # 3. Layout: SPLIT INSIGHT (2 Comparative Columns)
-        # -------------------------------------------------------------------
-        elif layout == "split_insight":
-            col_w = Inches(5.65)
-            gap = Inches(0.4)
-
-            for col_idx in range(2):
-                c_x = Inches(0.8) if col_idx == 0 else Inches(0.8) + col_w + gap
-                sc = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, c_x, content_top, col_w, content_height)
-                sc.fill.solid()
-                sc.fill.fore_color.rgb = card_bg_rgb
-                sc.line.color.rgb = card_border_rgb
-                sc.line.width = Pt(1.2)
-
-                col_header = "Perspective A: Strategic Catalysts" if col_idx == 0 else "Perspective B: Operational Realities"
-                col_color = accent_rgb if col_idx == 0 else accent_alt_rgb
-
-                tb = slide.shapes.add_textbox(c_x + Inches(0.4), content_top + Inches(0.3), col_w - Inches(0.8), content_height - Inches(0.6))
-                tf = tb.text_frame
-                tf.word_wrap = True
-
-                hp = tf.paragraphs[0]
-                hp.text = col_header
-                hp.font.size = Pt(15.5)
-                hp.font.bold = True
-                hp.font.color.rgb = col_color
-                hp.space_after = Pt(12)
-
-                # Concept card content
-                target_card = cards[col_idx] if col_idx < len(cards) else cards[-1]
-                cp = tf.add_paragraph()
-                cp.text = target_card.get("label", "Key Vector")
-                cp.font.size = Pt(17)
-                cp.font.bold = True
-                cp.font.color.rgb = text_title_rgb
-                cp.space_after = Pt(8)
-
-                dp = tf.add_paragraph()
-                dp.text = target_card.get("detail", "")
-                dp.font.size = Pt(13)
-                dp.font.color.rgb = text_body_rgb
-
-        # -------------------------------------------------------------------
-        # 4. Layout: PROCESS FLOW (Numbered Execution Stages)
-        # -------------------------------------------------------------------
-        elif layout == "process_flow":
-            num_steps = min(max(len(cards), 2), 3)
-            col_w = Inches(3.68) if num_steps == 3 else Inches(5.65)
-            gap = Inches(0.35)
-
-            for s_idx in range(num_steps):
-                step_item = cards[s_idx] if s_idx < len(cards) else cards[-1]
-                s_x = Inches(0.8) + (s_idx * (col_w + gap))
-
-                pc = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, s_x, content_top, col_w, content_height)
-                pc.fill.solid()
-                pc.fill.fore_color.rgb = card_bg_rgb
-                pc.line.color.rgb = card_border_rgb
-                pc.line.width = Pt(1)
-
-                # Numbered badge
-                badge_circle = slide.shapes.add_shape(MSO_SHAPE.OVAL, s_x + Inches(0.4), content_top + Inches(0.35), Inches(0.6), Inches(0.6))
-                badge_circle.fill.solid()
-                badge_circle.fill.fore_color.rgb = accent_rgb
-                badge_circle.line.color.rgb = accent_rgb
-                bp_p = badge_circle.text_frame.paragraphs[0]
-                bp_p.text = f"0{s_idx + 1}"
-                bp_p.font.size = Pt(12)
-                bp_p.font.bold = True
-                bp_p.font.color.rgb = RGBColor(255, 255, 255)
-                bp_p.alignment = PP_ALIGN.CENTER
-
-                tb = slide.shapes.add_textbox(s_x + Inches(0.35), content_top + Inches(1.15), col_w - Inches(0.7), content_height - Inches(1.4))
-                tf = tb.text_frame
-                tf.word_wrap = True
-
-                lp = tf.paragraphs[0]
-                lp.text = step_item.get("label", f"Phase {s_idx + 1}")
-                lp.font.size = Pt(16.5)
-                lp.font.bold = True
-                lp.font.color.rgb = text_title_rgb
-                lp.space_after = Pt(10)
-
-                dp = tf.add_paragraph()
-                dp.text = step_item.get("detail", "")
-                dp.font.size = Pt(13)
-                dp.font.color.rgb = text_body_rgb
-
-        # -------------------------------------------------------------------
-        # 5. Layout: CONCLUSION / EXECUTIVE MANDATE
-        # -------------------------------------------------------------------
-        else:
-            # Top Banner Card
-            top_h = Inches(1.7)
-            top_c = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.8), content_top, Inches(11.7), top_h)
-            top_c.fill.solid()
-            top_c.fill.fore_color.rgb = card_bg_rgb
-            top_c.line.color.rgb = accent_rgb
-            top_c.line.width = Pt(1.5)
-
-            tb_top = slide.shapes.add_textbox(Inches(1.1), content_top + Inches(0.2), Inches(11.1), Inches(1.3))
-            tf_top = tb_top.text_frame
-            tf_top.word_wrap = True
-            tp = tf_top.paragraphs[0]
-            tp.text = f'"{slide_title}: {subtitle or "Accelerating execution through definitive strategic conviction."}"'
-            tp.font.size = Pt(18)
-            tp.font.bold = True
-            tp.font.color.rgb = text_title_rgb
-
-            # 3 Bottom Execution Pillar Cards
-            bot_y = content_top + top_h + Inches(0.3)
-            bot_h = Inches(2.7)
-            num_cards = min(max(len(cards), 2), 3)
-            col_w = Inches(3.68) if num_cards == 3 else Inches(5.65)
-            gap = Inches(0.35)
-
-            for c_idx in range(num_cards):
-                card_item = cards[c_idx] if c_idx < len(cards) else cards[-1]
-                c_x = Inches(0.8) + (c_idx * (col_w + gap))
-
-                bc = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, c_x, bot_y, col_w, bot_h)
-                bc.fill.solid()
-                bc.fill.fore_color.rgb = card_bg_rgb
-                bc.line.color.rgb = card_border_rgb
-                bc.line.width = Pt(1)
-
-                tb = slide.shapes.add_textbox(c_x + Inches(0.35), bot_y + Inches(0.25), col_w - Inches(0.7), bot_h - Inches(0.45))
-                tf = tb.text_frame
-                tf.word_wrap = True
-
-                lp = tf.paragraphs[0]
-                lp.text = f"{c_idx + 1}. {card_item.get('label', 'Action Item')}"
-                lp.font.size = Pt(15)
-                lp.font.bold = True
-                lp.font.color.rgb = accent_alt_rgb
-                lp.space_after = Pt(6)
-
-                dp = tf.add_paragraph()
-                dp.text = card_item.get("detail", "")
-                dp.font.size = Pt(12)
-                dp.font.color.rgb = text_body_rgb
+        # Prompt caption pill at bottom of image
+        tb_lbl = slide.shapes.add_textbox(img_x + Inches(0.1), content_top + content_height - Inches(0.38), col_w - Inches(0.2), Inches(0.32))
+        tf_lbl = tb_lbl.text_frame
+        lp_lbl = tf_lbl.paragraphs[0]
+        short_prompt = img_prompt[:50] + "..." if len(img_prompt) > 50 else img_prompt
+        lp_lbl.text = f"✦ AI Visual: {short_prompt}"
+        lp_lbl.font.size = Pt(8.5)
+        lp_lbl.font.italic = True
+        lp_lbl.font.color.rgb = text_sub_rgb
+        lp_lbl.alignment = PP_ALIGN.CENTER
 
         # Bottom Slide Counter
         foot_box = slide.shapes.add_textbox(Inches(0.8), Inches(6.85), Inches(11.7), Inches(0.4))
@@ -1844,154 +1968,154 @@ async def build_presentation_deck_py(topic: str, slide_count: Optional[int] = No
         keys = {}
 
     clean_topic = topic.strip()
-    if slide_count and slide_count > 0:
-        slide_instruction = f"Generate exactly {slide_count} slides."
-        count_field = f'"total_slides": {slide_count},'
-    else:
-        slide_instruction = (
-            "DETERMINE THE SLIDE COUNT DYNAMICALLY based strictly on content complexity and depth:\n"
-            "- Focused executive overview: 4-6 slides\n"
-            "- Structured strategic roadmap: 7-10 slides\n"
-            "- Deep architectural masterclass: 11-16+ slides\n"
-            "Rule: Exactly '1 core concept per slide' with zero filler and zero fluff."
-        )
-        count_field = '"total_slides": dynamic_count,'
+    total_count = min(20, max(5, int(slide_count) if (slide_count and str(slide_count).isdigit()) else 5))
 
     system_prompt = (
-        "You are a world-class presentation JSON generator. Respond strictly and solely with valid JSON matching the schema. "
-        "Every slide must have exactly 3 distinct deep content blocks (title, description, tag). Ban all surface-level 1-line bullets, "
-        "Point 1/Point 2 placeholders, and generic filler."
+        "You are an Executive Presentation Architect and Principal AI Analyst. "
+        "Your task is to generate high-caliber, C-level presentation decks in strict JSON format. "
+        "Strict adherence to the requested schema, slide count, bullet depth (15-25 words per bullet with bold keyword first), "
+        "and documentary realistic photography prompts on every slide is mandatory. Output ONLY valid JSON with zero markdown codeblock wrappers."
     )
 
-    prompt = f"""You are a Principal Presentation Architect, Domain Specialist, and Executive Speechwriter.
-TARGET TOPIC: "{clean_topic}"
-TARGET AUDIENCE: Practitioners, engineers, leaders, and stakeholders demanding technical depth and authoritative, domain-grounded insight.
+    async def execute_llm_prompt(current_prompt: str) -> Optional[dict]:
+        provider_calls = []
+        if keys.get("gemini"):
+            provider_calls.append(lambda: call_gemini(keys["gemini"], "gemini-1.5-flash", system_prompt, current_prompt, [], options={"max_tokens": 8192}))
+        if keys.get("groq"):
+            provider_calls.append(lambda: call_groq(keys["groq"], "openai/gpt-oss-120b", system_prompt, current_prompt, [], options={"max_tokens": 3500}))
+            provider_calls.append(lambda: call_groq(keys["groq"], "qwen/qwen3.8-27b", system_prompt, current_prompt, [], options={"max_tokens": 3000}))
+        if keys.get("openai"):
+            provider_calls.append(lambda: call_openai(keys["openai"], "gpt-4o-mini", system_prompt, current_prompt, [], options={"max_tokens": 8192}))
+        if keys.get("openrouter"):
+            provider_calls.append(lambda: call_openrouter(keys["openrouter"], "google/gemini-2.0-flash-exp:free", system_prompt, current_prompt, [], options={"max_tokens": 8192}))
 
-{slide_instruction}
+        for call_fn in provider_calls:
+            try:
+                res = await call_fn()
+                if res and res.strip():
+                    parsed = repair_truncated_json(res)
+                    if parsed and isinstance(parsed.get("slides"), list) and len(parsed["slides"]) > 0:
+                        return parsed
+            except Exception as e:
+                print(f"[Presentation Provider Gen Warning]: {e}")
+        return None
 
-### MANDATORY CONTENT FORMULA (ZERO FLUFF, REFUSE SURFACE-LEVEL BULLETS):
-1. 100% STRICT TOPIC GROUNDING (ZERO HALLUCINATION & ZERO OFF-TOPIC CORPORATE JARGON):
-   - Every single slide title, subtitle, concept card, explanation, metric, and speaker note MUST be strictly, deeply, and exclusively grounded in "{clean_topic}".
-   - If "{clean_topic}" is scientific (e.g., Photosynthesis, Quantum Physics, CRISPR, Cellular Respiration):
-     * Explain genuine chemical reactions, molecular structures, laws of thermodynamics/physics, cellular organelles, and biochemical cycles.
-   - If "{clean_topic}" is history, literature, or arts:
-     * Focus strictly on verified historical events, dates, cultural epochs, literary devices, and documented records.
-   - If "{clean_topic}" is computer science, AI, or software (e.g., React, Kubernetes, Rust, Transformers):
-     * Discuss exact algorithms, architectural invariants, memory models, protocol specifications, and benchmark metrics.
-   - If "{clean_topic}" is business, economics, or marketing:
-     * Detail specific market dynamics, unit economics, regulatory mechanisms, or empirical industry data.
-   - STRICTLY FORBIDDEN: Do NOT inject generic corporate buzzwords (like "enterprise moats", "synergistic velocity", "cost avoidance") if "{clean_topic}" is NOT about corporate finance!
-   - NO FILLERS: Ban all generic labels like "Point 1", "Overview", "Key Factors", "Introduction", or "Important Aspects".
+    if total_count <= 10:
+        prompt = f"""You are a Principal Presentation Architect and Executive Speechwriter.
+Generate an executive presentation deck on the topic: "{clean_topic}".
+Generate exactly {total_count} cohesive, highly-structured slides.
 
-2. PER-SLIDE CONTENT FORMULA (EXACTLY 3 DISTINCT HIGH-DEPTH BLOCKS):
-   - "slide_title": An insightful conclusion or thesis statement (e.g., "Decentralized Compute: Eliminating Single-Node Failure Risks", "Thylakoid Proton Gradients: Driving ATP Synthase Rotational Catalysis"). Refuse shallow generic labels like "Overview" or "Point 1".
-   - "badge": A crisp domain category in 2-4 words (e.g., "SYSTEM ARCHITECTURE", "BIOCHEMICAL MECHANICS").
-   - "subtitle": Executive summary context line.
-   - EXACTLY 3 DISTINCT CONTENT BLOCKS in "cards_or_points":
-     * "title": 3-5 word technical or strategic concept specific to "{clean_topic}".
-     * "description": 2-3 detailed sentences explaining the mechanism, context, operational reality, or actionable insight with domain precision.
-     * "tag": Concrete metric or operational highlight (e.g., "99.98% SLA", "Cost: -35%", "ΔpH ~ 3.0", "O(log n)").
-   - "highlight_metric": Concrete domain benchmark {{ "value": "...", "caption": "..." }}.
-   - "speaker_notes": Comprehensive narrative script for the presenter (3-5 complete sentences written as a ready-to-deliver spoken talk-track).
+### PRESENTATION ARCHITECTURE & SLIDE ROLES:
+1. Slide 1 (Title Slide):
+   - layout_type: "title_hero"
+   - category: "EXECUTIVE BRIEFING"
+   - title: Clean compelling presentation title
+   - subtitle: Clear, contextual 1-line subtitle explaining the scope
+   - objective: High-level goal of this presentation
+   - bullets: 2-3 strategic focus points (e.g. "**Strategic Intent**: ...", "**Target Audience**: ...", "**Presentation Standard**: Created with ShiviAI • Executive Keynote Widescreen Edition")
+   - image_search_query: Specific realistic query for authentic operational subject
+   - visual_description: Documentary scene description of real-world subject in authentic setting
+   - image_prompt: High resolution documentary photography of authentic {clean_topic} in operational setting, realistic lighting, 4k, hyper-detailed, clean sharp focus
+2. Slide 2 (Objectives & Executive Summary):
+   - layout_type: "split_image_content"
+   - category: "STRATEGIC OBJECTIVE"
+   - title: Key Objectives & Core Challenges
+   - subtitle: Navigating primary catalysts and resolving structural bottlenecks
+   - objective: Define measurable milestones and overcome existing structural bottlenecks
+   - bullets: 3 to 4 detailed, high-value bullet points (15-25 words each, bold keyword first e.g. "**Operational Efficiency**: Eliminating redundant manual workflows to reduce cycle times by up to 35% through orchestrated pipelines.")
+   - image_search_query: Mission critical control room telemetry dashboards monitoring {clean_topic}
+   - visual_description: Operations room engineers monitoring operational telemetry metrics
+   - image_prompt: High-tech operations control room engineers monitoring telemetry metrics for {clean_topic}, realistic lighting, documentary photography, 4k
+3. Slides 3 to {total_count - 1} (Deep-Dive Analysis / Core Pillars):
+   - layout_type: "split_image_content"
+   - category: Distinct domain kicker (e.g. "SYSTEM ARCHITECTURE", "HARDWARE & COMPUTE", "DATA TOPOLOGY", "SECURITY & ZERO-TRUST", "PERFORMANCE BENCHMARKS", "ECOSYSTEM INTEGRATION", "INDUSTRY VERTICALS", "CRITICAL BOTTLENECKS", "CAPITAL EFFICIENCY")
+   - title: Distinct, insightful Heading/Title (DO NOT repeat the topic name alone, provide real conceptual conclusions)
+   - subtitle: Clear contextual 1-line subtitle
+   - objective: Core outcome or focus of this pillar
+   - bullets: 3 to 4 detailed, high-value bullet points (15-25 words each, bold keyword first)
+   - image_search_query: Specific real-world physical subject matching this slide's concept
+   - visual_description: Technical documentary description of the specific subject
+   - image_prompt: Precise realistic documentary photography depicting the exact subject of this slide, clean sharp focus, 4k
+4. Slide {total_count} (Strategic Roadmap & Conclusion):
+   - layout_type: "split_image_content"
+   - category: "STRATEGIC ROADMAP"
+   - title: Phased Implementation & Actionable Conclusion
+   - subtitle: Phased rollout and leadership execution mandate
+   - objective: Deliver actionable immediate takeaways and clear next steps
+   - bullets: 3 to 4 detailed actionable takeaways (15-25 words each, bold keyword first e.g. "**Phase 1 Execution**: ...", "**Risk Governance**: ...", "**Measurable ROI**: ...")
+   - image_search_query: Technical project management sprint planning session for {clean_topic}
+   - visual_description: Cross-functional technical leaders collaborating at project roadmap planning wall
+   - image_prompt: Technical leaders collaborating at project roadmap planning wall for {clean_topic}, realistic lighting, documentary photography, 4k
 
-3. SYSTEMATIC LAYOUT PRESETS:
-   - Slide 1 MUST use layout: "title".
-   - Architectural and visual slides (including Slide 2) MUST use layout: "split_image_content". For every visual slide:
-     * Include "image_prompt": An evocative, detailed prompt describing the schematic/system concept (e.g., "futuristic neural network visualization dark glowing cyan technical diagram 8k", "quantum qubit entanglement lattice blueprint neon cyan").
-     * Include exactly 2 high-depth technical content blocks in "cards_or_points".
-   - Other slides alternate between: "card_grid" (3-Card Grid preset with 3 blocks) and "metric_split" (Metric & 2 Deep Insight Blocks preset).
+### STRICT RULES:
+- Output ONLY valid JSON matching schema.
+- NO REPETITIVE PLACEHOLDERS: Do NOT output the topic name as bullet points or repeat generic filler. Every bullet point must contain authentic domain-specific insight.
+- EACH BULLET MUST HAVE 15-25 WORDS and START WITH A BOLD KEYWORD: e.g. "**Keyword**: Explanation..."
+- STRICT REALISTIC CONTEXTUAL PHOTOS (NO ABSTRACT ART): Every image prompt must depict realistic tangible subjects, documentary photography, 4k, realistic lighting.
 
-Return ONLY valid raw JSON matching this schema:
+### STRICT JSON SCHEMA:
 {{
-  "deck_title": "{clean_topic}: Executive Deep-Dive",
-  "theme": "{theme}",
-  {count_field}
+  "deck_title": "Clean Presentation Title",
+  "topic": "{clean_topic}",
   "slides": [
     {{
       "slide_number": 1,
-      "layout": "title",
-      "badge": "EXECUTIVE FOUNDATION",
-      "slide_title": "Insightful Thesis Conclusion Regarding {clean_topic}",
-      "subtitle": "Authoritative summary outlining the strategic and operational imperatives of {clean_topic}",
-      "cards_or_points": [
-        {{
-          "title": "3-5 Word Technical Concept",
-          "description": "2-3 detailed sentences explaining the mechanism, context, or actionable insight with authoritative domain precision.",
-          "tag": "Key Highlight / Metric"
-        }},
-        {{
-          "title": "Second Deep Domain Concept",
-          "description": "2-3 detailed sentences explaining the underlying operational or architectural dynamics of this facet.",
-          "tag": "Key Highlight / Metric"
-        }},
-        {{
-          "title": "Third Core Mechanism Concept",
-          "description": "2-3 detailed sentences explaining critical tradeoffs, performance impacts, or future trajectory.",
-          "tag": "Key Highlight / Metric"
-        }}
+      "layout_type": "title_hero",
+      "category": "EXECUTIVE BRIEFING",
+      "title": "Main Compelling Title",
+      "subtitle": "Clear, contextual 1-line subtitle explaining the scope",
+      "objective": "High-level goal of this presentation",
+      "bullets": [
+        "**Strategic Intent**: High-level vision outlining the roadmap and expected deliverables.",
+        "**Target Audience**: Designed for cross-functional stakeholders, engineers, and leadership."
       ],
-      "highlight_metric": {{ "value": "Benchmark", "caption": "Specific operational metric for {clean_topic}" }},
-      "speaker_notes": "Comprehensive narrative script for the presenter detailing the overarching thesis and foundational dynamics of this slide."
-    }},
-    {{
-      "slide_number": 2,
-      "layout": "split_image_content",
-      "badge": "ARCHITECTURAL TOPOLOGY",
-      "slide_title": "Visualized Architectural Manifold of {clean_topic}",
-      "subtitle": "Modular execution pathways and interconnected mechanics",
-      "image_prompt": "{clean_topic} detailed technical architecture visualization dark cyan glowing 8k",
-      "cards_or_points": [
-        {{
-          "title": "Primary Component",
-          "description": "2-3 detailed sentences explaining the mechanism and actionable insight with domain precision.",
-          "tag": "Key Highlight / Metric"
-        }},
-        {{
-          "title": "Decoupled Orchestration",
-          "description": "2-3 detailed sentences explaining underlying dynamics, fault isolation, and throughput scaling.",
-          "tag": "Key Highlight / Metric"
-        }}
-      ],
-      "highlight_metric": {{ "value": "99.4%", "caption": "Precision benchmark for {clean_topic}" }},
-      "speaker_notes": "Examining this visual topology, we observe how decoupled execution manifolds mitigate single-point latency overhead."
+      "image_search_query": "specific realistic query",
+      "visual_description": "documentary scene description of real-world subject",
+      "image_prompt": "Documentary photography of authentic subject in realistic operational setting, 4k, clean sharp focus, realistic lighting"
     }}
   ]
 }}"""
 
-    response_text = ""
-    # Resilient provider pipeline
-    provider_calls = []
-    if keys.get("groq"):
-        provider_calls.append(lambda: call_groq(keys["groq"], "qwen/qwen3.8-27b", system_prompt, prompt, []))
-        provider_calls.append(lambda: call_groq(keys["groq"], "openai/gpt-oss-120b", system_prompt, prompt, []))
-    if keys.get("gemini"):
-        provider_calls.append(lambda: call_gemini(keys["gemini"], "gemini-1.5-flash", system_prompt, prompt, []))
-    if keys.get("openai"):
-        provider_calls.append(lambda: call_openai(keys["openai"], "gpt-4o-mini", system_prompt, prompt, []))
-    if keys.get("openrouter"):
-        provider_calls.append(lambda: call_openrouter(keys["openrouter"], "google/gemini-2.0-flash-exp:free", system_prompt, prompt, []))
+        single_deck = await execute_llm_prompt(prompt)
+        if single_deck and isinstance(single_deck.get("slides"), list) and len(single_deck["slides"]) > 0:
+            return normalize_presentation_deck(single_deck, clean_topic, total_count)
+    else:
+        # Two-Batch Generation for total_count > 10 (Avoids Token Truncation)
+        batch1_count = 10
+        batch2_count = total_count - batch1_count
 
-    for call_fn in provider_calls:
-        try:
-            res = await call_fn()
-            if res and res.strip():
-                response_text = res
-                break
-        except Exception as e:
-            print(f"[Presentation Provider Gen Warning]: {e}")
+        prompt1 = f"""Generate Part 1 (Slides 1 to {batch1_count}) of an executive {total_count}-slide presentation deck on: "{clean_topic}".
+Slide 1 is title_hero (EXECUTIVE BRIEFING), Slide 2 is split_image_content (STRATEGIC OBJECTIVE), Slides 3 to {batch1_count} are deep architectural pillars.
+Every slide must have category, title, subtitle, objective, 3-4 bullets (15-25 words each, bold keyword first), image_search_query, visual_description, and image_prompt (realistic documentary photography, 4k).
+Output ONLY valid JSON: {{ "deck_title": "Clean Title", "topic": "{clean_topic}", "slides": [...] }}"""
 
-    deck = None
-    if response_text:
-        try:
-            cleaned = re.sub(r'```(?:json)?', '', response_text).replace('```', '').strip()
-            deck = json.loads(cleaned)
-        except Exception as e:
-            print(f"[JSON Parse Warning]: {e}")
+        prompt2 = f"""Generate Part 2 (Slides {batch1_count + 1} to {total_count}) continuing the executive presentation deck on: "{clean_topic}".
+Slides {batch1_count + 1} to {total_count - 1} are Advanced Pillars (Governance, Benchmarks, Case Studies, Bottlenecks, Mitigation, Economics).
+Slide {total_count} is STRATEGIC ROADMAP (Phased Implementation & Actionable Conclusion).
+Every slide must have category, title, subtitle, objective, 3-4 bullets (15-25 words each, bold keyword first), image_search_query, visual_description, and image_prompt (realistic documentary photography, 4k).
+Output ONLY valid JSON: {{ "deck_title": "Clean Title", "topic": "{clean_topic}", "slides": [...] }}"""
 
-    if not deck or not isinstance(deck.get("slides"), list) or len(deck["slides"]) == 0:
-        return generate_rich_fallback_deck_py(clean_topic, slide_count, theme)
+        deck_part1, deck_part2 = await asyncio.gather(
+            execute_llm_prompt(prompt1),
+            execute_llm_prompt(prompt2)
+        )
 
-    return normalize_presentation_deck(deck, topic=clean_topic)
+        combined_slides = []
+        if deck_part1 and isinstance(deck_part1.get("slides"), list):
+            combined_slides.extend(deck_part1["slides"])
+        if deck_part2 and isinstance(deck_part2.get("slides"), list):
+            combined_slides.extend(deck_part2["slides"])
+
+        if combined_slides:
+            merged_deck = {
+                "deck_title": (deck_part1 and deck_part1.get("deck_title")) or f"{clean_topic}: Executive Masterclass",
+                "topic": clean_topic,
+                "theme": theme,
+                "slides": combined_slides
+            }
+            return normalize_presentation_deck(merged_deck, clean_topic, total_count)
+
+    return generate_rich_fallback_deck_py(clean_topic, total_count, theme)
 
 @app.post("/api/generate-presentation")
 async def generate_presentation(req: PresentationRequest):
@@ -1999,7 +2123,7 @@ async def generate_presentation(req: PresentationRequest):
     if not topic:
         raise HTTPException(status_code=400, detail="Topic is required")
 
-    slide_count = req.slideCount if (req.slideCount and req.slideCount > 0) else None
+    slide_count = min(20, max(5, int(req.slideCount))) if (req.slideCount and req.slideCount > 0) else None
     theme = req.theme or "modern_blue"
     env = load_env_dict()
     provider = req.provider or env.get("DEFAULT_PROVIDER", "groq")

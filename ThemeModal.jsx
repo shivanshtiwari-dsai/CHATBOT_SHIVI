@@ -71,9 +71,9 @@ export const THEME_PALETTES = [
 
 export default function ThemeModal({
   isOpen = false,
-  onClose = () => {},
+  onClose = () => { },
   activeTheme = 'cyberpunk',
-  setActiveTheme = () => {}
+  setActiveTheme = () => { }
 }) {
   // Sync Escape key to close modal
   useEffect(() => {
@@ -107,14 +107,14 @@ export default function ThemeModal({
   };
 
   return (
-    <div 
+    <div
       className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-black/75 backdrop-blur-md transition-all duration-300 animate-fadeIn"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
       aria-labelledby="theme-modal-title"
     >
-      <div 
+      <div
         className="w-full max-w-3xl max-h-[90vh] bg-[#111827]/90 text-slate-100 rounded-2xl border border-white/10 shadow-2xl backdrop-blur-xl overflow-hidden flex flex-col transform transition-all duration-200 scale-100"
         onClick={(e) => e.stopPropagation()}
       >
@@ -167,8 +167,8 @@ export default function ThemeModal({
                     }
                   }}
                   className={`relative flex flex-col justify-between p-4 rounded-xl cursor-pointer border transition-all duration-200 select-none group outline-none
-                    ${isSelected 
-                      ? 'bg-white/[0.08] border-cyan-400 shadow-lg' 
+                    ${isSelected
+                      ? 'bg-white/[0.08] border-cyan-400 shadow-lg'
                       : 'bg-white/[0.03] border-white/10 hover:border-white/30 hover:bg-white/[0.06] hover:-translate-y-1 hover:shadow-md'
                     }`}
                   style={{
@@ -189,7 +189,7 @@ export default function ThemeModal({
                       </div>
 
                       {isSelected && (
-                        <span 
+                        <span
                           className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider text-black shadow-sm"
                           style={{ backgroundColor: theme.primary }}
                         >
@@ -207,29 +207,29 @@ export default function ThemeModal({
                   </div>
 
                   {/* Preview Palette Dots & Gradient */}
-                  <div 
+                  <div
                     className="flex items-center justify-between px-3 py-2 rounded-lg border border-white/5"
                     style={{ backgroundColor: theme.background }}
                   >
                     <div className="flex items-center gap-1.5">
-                      <span 
-                        className="w-3.5 h-3.5 rounded-full shadow-sm ring-1 ring-white/10" 
+                      <span
+                        className="w-3.5 h-3.5 rounded-full shadow-sm ring-1 ring-white/10"
                         style={{ backgroundColor: theme.primary }}
                         title={`Primary: ${theme.primary}`}
                       />
-                      <span 
-                        className="w-3.5 h-3.5 rounded-full shadow-sm ring-1 ring-white/10" 
+                      <span
+                        className="w-3.5 h-3.5 rounded-full shadow-sm ring-1 ring-white/10"
                         style={{ backgroundColor: theme.accent }}
                         title={`Accent: ${theme.accent}`}
                       />
-                      <span 
-                        className="w-3.5 h-3.5 rounded-full shadow-sm ring-1 ring-white/20" 
+                      <span
+                        className="w-3.5 h-3.5 rounded-full shadow-sm ring-1 ring-white/20"
                         style={{ backgroundColor: theme.background }}
                         title={`Background: ${theme.background}`}
                       />
                     </div>
 
-                    <div 
+                    <div
                       className="w-12 h-2 rounded-full shadow-inner"
                       style={{ background: theme.gradient }}
                     />
