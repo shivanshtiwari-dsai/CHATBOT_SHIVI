@@ -31,8 +31,8 @@
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/YOUR_USERNAME/shivi-ai-chatbot.git
-cd shivi-ai-chatbot
+git clone https://github.com/shivanshtiwari-dsai/CHATBOT_SHIVI.git
+cd CHATBOT_SHIVI
 ```
 
 ### 2. Configure Environment Variables
