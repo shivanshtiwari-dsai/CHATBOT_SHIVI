@@ -556,14 +556,27 @@ function hashCode(str) {
 }
 
 function buildContextualSlideImageUrl(slide, topic, index) {
-    const keySubject = String(slide.title || slide.slide_title || '').replace(/[^a-zA-Z0-9 ]/g, '').trim();
-    let specificContext = String(slide.image_prompt || slide.visual_description || slide.image_search_query || `${topic} ${keySubject}`).trim();
+    const slideObj = slide || {};
+    const rawTitle = slideObj.title || slideObj.slide_title || '';
+    const keySubject = String(rawTitle).replace(/[^a-zA-Z0-9 ]/g, '').trim();
+
+    let specificContext = String(slideObj.image_prompt || slideObj.visual_description || slideObj.image_search_query || '').trim();
+    if (!specificContext) {
+        let keyBullet = '';
+        if (Array.isArray(slideObj.bullets) && slideObj.bullets.length > 0) {
+            const firstB = String(slideObj.bullets[0]).replace(/^\*\*.*?\*\*:\s*/, '').replace(/[^a-zA-Z0-9 ]/g, '').trim();
+            keyBullet = firstB.slice(0, 60);
+        }
+        specificContext = `${topic} ${keySubject} ${keyBullet}`.trim() || `${topic} ${keySubject}`;
+    }
+
     // Ban generic abstract or surreal buzzwords so photos remain strictly contextual
-    specificContext = specificContext.replace(/\b(abstract|surreal|geometric shapes|neon glow|digital wave|glowing swirls|3D data visualization|hologram)\b/gi, '').trim();
+    specificContext = specificContext.replace(/\b(abstract|surreal|geometric shapes|neon glow|digital wave|glowing swirls|3D data visualization|hologram|futuristic background)\b/gi, '').trim();
     if (!specificContext) specificContext = `${topic} ${keySubject}`;
 
     // Enforce realistic, documentary, or technical photography style matching the domain
-    const enhancedPrompt = `${specificContext}, high resolution documentary photography, editorial photo, realistic lighting, 4k, hyper-detailed, clean sharp focus, authentic context`;
+    const styleSuffix = 'high resolution documentary photography, editorial photo, realistic lighting, 4k, hyper-detailed, clean sharp focus, authentic context';
+    const enhancedPrompt = specificContext.includes('documentary photography') ? specificContext : `${specificContext}, ${styleSuffix}`;
 
     // Generate deterministic seed based on topic and slide index so images stay consistent
     const seed = Math.abs(hashCode(`${topic}_slide_${index}`));
@@ -574,6 +587,10 @@ function buildContextualSlideImageUrl(slide, topic, index) {
 function repairTruncatedJson(jsonStr) {
     if (!jsonStr || typeof jsonStr !== 'string') return null;
     let text = jsonStr.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+    const firstBrace = text.indexOf('{');
+    if (firstBrace !== -1) {
+        text = text.substring(firstBrace).trim();
+    }
     try {
         return JSON.parse(text);
     } catch (e) {
