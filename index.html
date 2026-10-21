@@ -206,6 +206,13 @@
 
                 <!-- 3. RIGHT: User profile avatar/initials only (compact drop-down menu) -->
                 <div class="header-right">
+                    <!-- Live Voice Mode Quick Launch Pill -->
+                    <button class="live-voice-header-btn" id="headerLiveVoiceBtn" title="Launch Gemini / ChatGPT Live Voice Mode" aria-label="Live Voice Mode">
+                        <span class="live-voice-pulse-dot"></span>
+                        <i data-lucide="radio"></i>
+                        <span class="live-voice-text">Live Voice</span>
+                    </button>
+
                     <!-- Speaking Audio Indicator (visible only when speaking) -->
                     <button class="icon-btn speaking-stop-btn" id="stopSpeakingBtn" title="Stop Voice Playback" style="display: none;">
                         <span class="audio-waves">
@@ -233,6 +240,11 @@
                             <div class="user-popover-divider"></div>
 
                             <!-- Tools & Toggles (Streamlined into compact popover) -->
+                            <button type="button" class="user-popover-item" id="popoverLiveVoiceBtn" title="Continuous Hands-Free Voice Mode">
+                                <i data-lucide="radio"></i>
+                                <span>Live Voice Mode</span>
+                                <span class="custom-badge-pill live-badge">LIVE</span>
+                            </button>
                             <button type="button" class="user-popover-item" id="openBrainBtnHeader" title="Brain Knowledge & API Hub">
                                 <i data-lucide="brain"></i>
                                 <span>Brain Knowledge Hub</span>
@@ -438,6 +450,13 @@
                                         <span class="menu-item-desc">High-res artwork & concepts</span>
                                     </div>
                                 </button>
+                                <button type="button" class="action-menu-item" id="menuActionLiveVoice">
+                                    <span class="menu-item-emoji">🎙️</span>
+                                    <div class="menu-item-text">
+                                        <span class="menu-item-title">Live Voice Conversation</span>
+                                        <span class="menu-item-desc">Hands-free two-way voice mode</span>
+                                    </div>
+                                </button>
                                 <button type="button" class="action-menu-item" id="menuActionAttach" style="display: none;">
                                     <span class="menu-item-emoji">📎</span>
                                     <div class="menu-item-text">
@@ -469,6 +488,12 @@
                         <button type="button" class="dock-btn voice-btn" id="micBtn" title="Speak to Shivi (Voice Input)">
                             <i data-lucide="mic" id="micIcon"></i>
                             <div class="mic-wave" id="micWave"></div>
+                        </button>
+
+                        <!-- Live Continuous Voice Mode Button (Gemini / ChatGPT Style) -->
+                        <button type="button" class="dock-btn live-voice-btn" id="startLiveVoiceBtn" title="Live Continuous Voice Conversation (Hands-Free)">
+                            <span class="live-voice-glow-ring"></span>
+                            <i data-lucide="audio-waveform" id="liveVoiceIcon"></i>
                         </button>
 
                         <!-- Send Button -->
@@ -508,11 +533,14 @@
                             />
                             <select id="studioCountSelect" class="studio-select" title="Number of Slides">
                                 <option value="">Dynamic Count</option>
-                                <option value="4">4 Slides</option>
-                                <option value="6" selected>6 Slides</option>
+                                <option value="5">5 Slides</option>
+                                <option value="6">6 Slides</option>
                                 <option value="8">8 Slides</option>
-                                <option value="10">10 Slides</option>
+                                <option value="10" selected>10 Slides</option>
                                 <option value="12">12 Slides</option>
+                                <option value="15">15 Slides</option>
+                                <option value="18">18 Slides</option>
+                                <option value="20">20 Slides</option>
                             </select>
                             <select id="studioThemeSelect" class="studio-select" title="Deck Theme">
                                 <option value="dark_modern" selected>Midnight Dark</option>
@@ -1719,9 +1747,13 @@
                         <label class="form-label" style="font-weight: 600; font-size: 0.85rem; margin-bottom: 6px; display: block;">Slide Count:</label>
                         <select id="pptSlideCountSelect" class="custom-select" style="width: 100%;">
                             <option value="auto" selected>✨ Dynamic (Auto-analyzed by AI Depth)</option>
-                            <option value="4">4-6 Slides (Focused / Executive Brief)</option>
-                            <option value="8">8-12 Slides (In-Depth Strategy Guide)</option>
-                            <option value="16">16-20+ Slides (Comprehensive Masterclass)</option>
+                            <option value="5">5 Slides (Executive Briefing)</option>
+                            <option value="8">8 Slides (Strategic Overview)</option>
+                            <option value="10">10 Slides (Standard Keynote)</option>
+                            <option value="12">12 Slides (In-Depth Technical Brief)</option>
+                            <option value="15">15 Slides (Comprehensive Architecture)</option>
+                            <option value="18">18 Slides (Advanced Enterprise Deep-Dive)</option>
+                            <option value="20">20 Slides (Full Masterclass Deck)</option>
                         </select>
                     </div>
                     <div class="form-group">
@@ -1930,10 +1962,13 @@
                     <button type="button" class="auth-close-btn" id="closeAuthModalBtn" title="Close &amp; Continue as Guest">
                         <i data-lucide="x"></i>
                     </button>
-                    <!-- Tab Switcher (Sign In vs Create Account) -->
+                    <!-- Tab Switcher (Sign In vs Quick Direct vs Create Account) -->
                     <div class="auth-tab-switcher" role="tablist">
                         <button type="button" class="auth-tab-btn active" id="authTabLogin" role="tab" aria-selected="true" aria-controls="authLoginForm">
                             <i data-lucide="log-in" style="width: 16px; height: 16px;"></i> Sign In
+                        </button>
+                        <button type="button" class="auth-tab-btn" id="authTabDirect" role="tab" aria-selected="false" aria-controls="authDirectForm">
+                            <i data-lucide="zap" style="width: 16px; height: 16px;"></i> Quick Direct
                         </button>
                         <button type="button" class="auth-tab-btn" id="authTabSignup" role="tab" aria-selected="false" aria-controls="authSignupForm">
                             <i data-lucide="user-plus" style="width: 16px; height: 16px;"></i> Create Account
@@ -2018,6 +2053,73 @@
                                 <span>GitHub</span>
                             </button>
                         </div>
+
+                        <!-- 1. CONTINUE AS GUEST / INSTANT DEMO (Zero-Friction Access) -->
+                        <button type="button" class="btn-guest-auth" id="btnGuestAuth">
+                            <i data-lucide="sparkles" class="btn-guest-icon"></i>
+                            <span class="btn-guest-label">✨ Continue as Guest / Try Instant Demo</span>
+                            <span class="btn-guest-badge">0-Click Free</span>
+                        </button>
+
+                        <!-- 3. SIMPLE EMAIL / DIRECT ACCESS FALLBACK -->
+                        <div class="auth-direct-fallback">
+                            <div class="auth-divider">
+                                <span>or 1-step direct access (no password)</span>
+                            </div>
+                            <div class="auth-direct-inputs">
+                                <div class="auth-input-wrapper">
+                                    <i data-lucide="user" class="auth-input-icon"></i>
+                                    <input type="text" id="directNameInput" placeholder="Your Name (e.g. Alex)" autocomplete="name">
+                                </div>
+                                <div class="auth-input-wrapper">
+                                    <i data-lucide="mail" class="auth-input-icon"></i>
+                                    <input type="email" id="directEmailInput" placeholder="Your Email (e.g. alex@company.com)" autocomplete="email">
+                                </div>
+                                <button type="button" class="btn-direct-enter" id="btnDirectEnter">
+                                    <i data-lucide="zap" style="width: 16px; height: 16px;"></i>
+                                    <span>Enter ShiviAI</span>
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+
+                    <!-- QUICK DIRECT ACCESS FORM -->
+                    <form id="authDirectForm" class="auth-form" novalidate style="display: none;">
+                        <div class="auth-header-text">
+                            <h3>Instant Direct Access</h3>
+                            <p>Jump straight into ShiviAI with zero friction. No password or external OAuth setup required.</p>
+                        </div>
+
+                        <button type="button" class="btn-guest-auth" id="btnGuestAuthTab">
+                            <i data-lucide="sparkles" class="btn-guest-icon"></i>
+                            <span class="btn-guest-label">✨ Continue as Guest / Try Instant Demo</span>
+                            <span class="btn-guest-badge">Instant</span>
+                        </button>
+
+                        <div class="auth-divider">
+                            <span>or enter name &amp; email</span>
+                        </div>
+
+                        <div class="auth-input-group">
+                            <label for="directFormName">Your Name</label>
+                            <div class="auth-input-wrapper">
+                                <i data-lucide="user" class="auth-input-icon"></i>
+                                <input type="text" id="directFormName" placeholder="e.g. Alex Morgan" autocomplete="name">
+                            </div>
+                        </div>
+
+                        <div class="auth-input-group">
+                            <label for="directFormEmail">Work or Personal Email</label>
+                            <div class="auth-input-wrapper">
+                                <i data-lucide="mail" class="auth-input-icon"></i>
+                                <input type="email" id="directFormEmail" placeholder="e.g. alex@company.com" autocomplete="email">
+                            </div>
+                        </div>
+
+                        <button type="submit" class="btn-auth-gradient" id="btnDirectSubmit">
+                            <span class="btn-text">Enter ShiviAI</span>
+                            <i data-lucide="arrow-right" class="btn-icon"></i>
+                        </button>
                     </form>
 
                     <!-- 2. SIGNUP FORM -->
@@ -2151,6 +2253,13 @@
                 <span id="chooserPromptText">Account Chooser Active &bull; prompt=select_account</span>
             </div>
 
+            <!-- Instant Guest Button in Chooser -->
+            <button type="button" class="btn-guest-auth btn-guest-chooser" id="btnGuestChooser">
+                <i data-lucide="sparkles" class="btn-guest-icon"></i>
+                <span class="btn-guest-label">✨ Continue as Guest / Try Instant Demo</span>
+                <span class="btn-guest-badge">Instant</span>
+            </button>
+
             <!-- Quick Account Selector Choices -->
             <div class="chooser-accounts-section">
                 <div class="chooser-section-label">Select a saved or suggested account:</div>
@@ -2192,6 +2301,128 @@
                     <i data-lucide="arrow-left" style="width: 14px; height: 14px;"></i> Back to Sign In
                 </button>
             </div>
+        </div>
+    </div>
+
+    <!-- ================================================================= -->
+    <!-- GEMINI / CHATGPT STYLE LIVE CONTINUOUS VOICE CONVERSATION OVERLAY -->
+    <!-- ================================================================= -->
+    <div class="voice-overlay-backdrop" id="voiceOverlay" style="display: none;" role="dialog" aria-modal="true" aria-label="Live Voice Conversation">
+        <div class="voice-overlay-container">
+            <!-- 1. Top Bar / Controls -->
+            <header class="voice-overlay-header">
+                <div class="voice-branding">
+                    <span class="voice-live-indicator">
+                        <span class="live-dot-beacon"></span>
+                        <span class="voice-brand-title">Shivi Live</span>
+                    </span>
+                    <span class="voice-status-pill" id="voiceStatusPill">
+                        <span class="voice-status-text" id="voiceStatusText">Connecting...</span>
+                    </span>
+                </div>
+
+                <div class="voice-header-actions">
+                    <!-- Language Selection Dropdown -->
+                    <div class="voice-lang-picker">
+                        <i data-lucide="languages" class="voice-control-icon"></i>
+                        <select id="voiceLanguageSelect" class="voice-lang-select" aria-label="Speech Language">
+                            <option value="en-US">English (US)</option>
+                            <option value="en-IN" selected>English (India)</option>
+                            <option value="hi-IN">हिन्दी (Hindi)</option>
+                        </select>
+                    </div>
+
+                    <!-- Voice Speaker Dropdown -->
+                    <div class="voice-speaker-picker">
+                        <i data-lucide="volume-2" class="voice-control-icon"></i>
+                        <select id="voiceSpeakerSelect" class="voice-speaker-select" aria-label="Synthesized Voice">
+                            <!-- Populated dynamically from voiceService.js getAvailableVoices -->
+                        </select>
+                    </div>
+
+                    <!-- Close / Exit Overlay Button -->
+                    <button type="button" class="voice-icon-btn voice-close-btn" id="voiceCloseBtn" title="Exit Live Voice Mode (Esc)">
+                        <i data-lucide="x"></i>
+                    </button>
+                </div>
+            </header>
+
+            <!-- 2. Interactive Voice Stage / Visualizer Core -->
+            <main class="voice-overlay-stage">
+                <!-- Hint / Status Subtitle -->
+                <div class="voice-stage-hint" id="voiceStageHint">
+                    Tap anywhere or speak naturally. Shivi listens hands-free.
+                </div>
+
+                <!-- Glowing Morphing Multi-Ring Visualizer Orb -->
+                <div class="voice-orb-wrapper" id="voiceOrbWrapper">
+                    <div class="voice-orb-container state-idle" id="voiceOrbContainer" title="Click to barge-in or interrupt" tabindex="0" role="button" aria-label="Voice Visualizer Orb">
+                        <div class="orb-ring ring-outer"></div>
+                        <div class="orb-ring ring-middle"></div>
+                        <div class="orb-ring ring-inner"></div>
+                        <div class="voice-orb-core">
+                            <div class="orb-particles"></div>
+                            <div class="orb-shimmer"></div>
+                            <i data-lucide="mic" class="orb-center-icon" id="orbCenterIcon"></i>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Real-time Equalizer Waveform Bars -->
+                <div class="voice-waveform-container" id="voiceWaveformContainer">
+                    <div class="voice-waveform-bar bar-1"></div>
+                    <div class="voice-waveform-bar bar-2"></div>
+                    <div class="voice-waveform-bar bar-3"></div>
+                    <div class="voice-waveform-bar bar-4"></div>
+                    <div class="voice-waveform-bar bar-5"></div>
+                    <div class="voice-waveform-bar bar-6"></div>
+                    <div class="voice-waveform-bar bar-7"></div>
+                    <div class="voice-waveform-bar bar-8"></div>
+                    <div class="voice-waveform-bar bar-9"></div>
+                </div>
+
+                <!-- Live Floating Subtitle & Transcript Card -->
+                <div class="voice-transcript-card" id="voiceTranscriptCard">
+                    <div class="voice-speaker-badge" id="voiceSpeakerBadge">
+                        <span class="speaker-icon-wrapper" id="speakerIconWrapper">
+                            <i data-lucide="user" id="speakerIcon"></i>
+                        </span>
+                        <span class="speaker-name" id="speakerName">Listening...</span>
+                    </div>
+                    <div class="voice-transcript-content" id="voiceTranscriptContent">
+                        <p class="voice-transcript-text" id="voiceTranscriptText">
+                            Say something like: "Hello Shivi, how are you today?"
+                        </p>
+                    </div>
+                </div>
+            </main>
+
+            <!-- 3. Bottom Action Dock -->
+            <footer class="voice-overlay-dock">
+                <!-- Mute / Unmute Mic -->
+                <button type="button" class="voice-dock-btn" id="voiceMuteMicBtn" title="Mute Microphone">
+                    <i data-lucide="mic" id="voiceMuteIcon"></i>
+                    <span class="dock-btn-label" id="voiceMuteLabel">Mic On</span>
+                </button>
+
+                <!-- Barge-in / Interrupt Bot Speech -->
+                <button type="button" class="voice-dock-btn voice-dock-interrupt" id="voiceInterruptBtn" title="Interrupt Shivi (Barge-in)">
+                    <i data-lucide="square"></i>
+                    <span class="dock-btn-label">Interrupt</span>
+                </button>
+
+                <!-- Pause / Resume Hands-Free Loop -->
+                <button type="button" class="voice-dock-btn" id="voicePauseResumeBtn" title="Pause or Resume Conversation">
+                    <i data-lucide="pause" id="voicePauseResumeIcon"></i>
+                    <span class="dock-btn-label" id="voicePauseResumeLabel">Pause</span>
+                </button>
+
+                <!-- End Session -->
+                <button type="button" class="voice-dock-btn voice-dock-end" id="voiceEndSessionBtn" title="End Live Voice Session">
+                    <i data-lucide="phone-off"></i>
+                    <span class="dock-btn-label">End</span>
+                </button>
+            </footer>
         </div>
     </div>
 

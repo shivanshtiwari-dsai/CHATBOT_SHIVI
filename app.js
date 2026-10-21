@@ -260,10 +260,40 @@ Identity Directive:
         userInput: document.getElementById('userInput'),
         sendBtn: document.getElementById('sendBtn'),
         micBtn: document.getElementById('micBtn'),
+        startLiveVoiceBtn: document.getElementById('startLiveVoiceBtn'),
+        headerLiveVoiceBtn: document.getElementById('headerLiveVoiceBtn'),
+        popoverLiveVoiceBtn: document.getElementById('popoverLiveVoiceBtn'),
+        menuActionLiveVoice: document.getElementById('menuActionLiveVoice'),
         attachBtn: document.getElementById('attachBtn'),
         openImageGenModalBtn: document.getElementById('openImageGenModalBtn'),
         fileAttachmentInput: document.getElementById('fileAttachmentInput'),
         charCount: document.getElementById('charCount'),
+
+        // Live Voice Overlay Elements
+        voiceOverlay: document.getElementById('voiceOverlay'),
+        voiceStatusPill: document.getElementById('voiceStatusPill'),
+        voiceStatusText: document.getElementById('voiceStatusText'),
+        voiceLanguageSelect: document.getElementById('voiceLanguageSelect'),
+        voiceSpeakerSelect: document.getElementById('voiceSpeakerSelect'),
+        voiceCloseBtn: document.getElementById('voiceCloseBtn'),
+        voiceStageHint: document.getElementById('voiceStageHint'),
+        voiceOrbWrapper: document.getElementById('voiceOrbWrapper'),
+        voiceOrbContainer: document.getElementById('voiceOrbContainer'),
+        orbCenterIcon: document.getElementById('orbCenterIcon'),
+        voiceWaveformContainer: document.getElementById('voiceWaveformContainer'),
+        voiceTranscriptCard: document.getElementById('voiceTranscriptCard'),
+        voiceSpeakerBadge: document.getElementById('voiceSpeakerBadge'),
+        speakerIcon: document.getElementById('speakerIcon'),
+        speakerName: document.getElementById('speakerName'),
+        voiceTranscriptText: document.getElementById('voiceTranscriptText'),
+        voiceMuteMicBtn: document.getElementById('voiceMuteMicBtn'),
+        voiceMuteIcon: document.getElementById('voiceMuteIcon'),
+        voiceMuteLabel: document.getElementById('voiceMuteLabel'),
+        voiceInterruptBtn: document.getElementById('voiceInterruptBtn'),
+        voicePauseResumeBtn: document.getElementById('voicePauseResumeBtn'),
+        voicePauseResumeIcon: document.getElementById('voicePauseResumeIcon'),
+        voicePauseResumeLabel: document.getElementById('voicePauseResumeLabel'),
+        voiceEndSessionBtn: document.getElementById('voiceEndSessionBtn'),
 
         // Toast Container
         toastContainer: document.getElementById('toastContainer'),
@@ -567,6 +597,17 @@ Identity Directive:
         btnBackToLogin: document.getElementById('btnBackToLogin'),
         btnGoogleAuth: document.getElementById('btnGoogleAuth'),
         btnGithubAuth: document.getElementById('btnGithubAuth'),
+        btnGuestAuth: document.getElementById('btnGuestAuth'),
+        btnGuestAuthTab: document.getElementById('btnGuestAuthTab'),
+        btnGuestChooser: document.getElementById('btnGuestChooser'),
+        authTabDirect: document.getElementById('authTabDirect'),
+        authDirectForm: document.getElementById('authDirectForm'),
+        directNameInput: document.getElementById('directNameInput'),
+        directEmailInput: document.getElementById('directEmailInput'),
+        btnDirectEnter: document.getElementById('btnDirectEnter'),
+        directFormName: document.getElementById('directFormName'),
+        directFormEmail: document.getElementById('directFormEmail'),
+        btnDirectSubmit: document.getElementById('btnDirectSubmit'),
         signupName: document.getElementById('signupName'),
         signupEmail: document.getElementById('signupEmail'),
         signupPassword: document.getElementById('signupPassword'),
@@ -691,6 +732,10 @@ Identity Directive:
                 elements.authTabLogin.classList.toggle('active', tab === 'login');
                 elements.authTabLogin.setAttribute('aria-selected', tab === 'login');
             }
+            if (elements.authTabDirect) {
+                elements.authTabDirect.classList.toggle('active', tab === 'direct');
+                elements.authTabDirect.setAttribute('aria-selected', tab === 'direct');
+            }
             if (elements.authTabSignup) {
                 elements.authTabSignup.classList.toggle('active', tab === 'signup');
                 elements.authTabSignup.setAttribute('aria-selected', tab === 'signup');
@@ -699,11 +744,17 @@ Identity Directive:
             if (elements.authLoginForm) {
                 elements.authLoginForm.style.display = tab === 'login' ? 'block' : 'none';
             }
+            if (elements.authDirectForm) {
+                elements.authDirectForm.style.display = tab === 'direct' ? 'block' : 'none';
+            }
             if (elements.authSignupForm) {
                 elements.authSignupForm.style.display = tab === 'signup' ? 'block' : 'none';
             }
             if (elements.authForgotForm) {
                 elements.authForgotForm.style.display = tab === 'forgot' ? 'block' : 'none';
+            }
+            if (window.lucide && lucide.createIcons) {
+                try { lucide.createIcons(); } catch (e) {}
             }
         },
 
@@ -1014,6 +1065,8 @@ Identity Directive:
                 localStorage.setItem('current_user', JSON.stringify(userObj));
                 localStorage.setItem('shivi_auth_token', token);
                 localStorage.setItem('shivi_user', JSON.stringify(userObj));
+                localStorage.setItem('shivi_active_token', token);
+                localStorage.setItem('shivi_current_user', JSON.stringify(userObj));
 
                 this.closeAccountChooser();
                 await loadSavedState(userObj);
@@ -1026,23 +1079,128 @@ Identity Directive:
             }
         },
 
-        openAccountChooser(provider = 'google') {
-            const googleClientId = state.backendConfig.googleClientId || '';
-            const githubClientId = state.backendConfig.githubClientId || '';
-            const REDIRECT_URI = window.location.origin + window.location.pathname;
+        getDynamicOAuthRedirectUri() {
+            if (typeof window === 'undefined') return '';
+            const currentDomain = window.location.origin || `${window.location.protocol}//${window.location.host}`;
+            const pathname = window.location.pathname.replace(/\/index\.html$/i, '') || '/';
+            return `${currentDomain}${pathname}`;
+        },
 
-            // If real Google OAuth credentials exist, redirect with prompt=select_account
-            if (provider === 'google' && googleClientId) {
-                const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(googleClientId)}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=token&scope=email%20profile&prompt=select_account`;
-                window.location.href = googleAuthUrl;
-                return;
+        async handleGuestLogin() {
+            try {
+                this.hideAlert();
+                const guestId = Math.floor(1000 + Math.random() * 9000);
+                const guestUser = {
+                    name: `Explorer #${guestId}`,
+                    email: `guest_${guestId}@shiviai.demo`,
+                    provider: 'guest',
+                    avatar: '👤'
+                };
+                const guestToken = `guest_token_${Date.now()}`;
+
+                // Store session across all compatibility keys
+                localStorage.removeItem('shivi_signed_out');
+                localStorage.setItem('shivi_current_user', JSON.stringify(guestUser));
+                localStorage.setItem('shivi_active_token', guestToken);
+                localStorage.setItem('current_user', JSON.stringify(guestUser));
+                localStorage.setItem('shivi_user', JSON.stringify(guestUser));
+                localStorage.setItem('auth_token', guestToken);
+                localStorage.setItem('shivi_auth_token', guestToken);
+
+                state.auth.user = guestUser;
+                state.auth.token = guestToken;
+                state.auth.isAuthenticated = true;
+                state.auth.isLoading = false;
+                state.activeView = 'chat';
+
+                this.closeAccountChooser();
+                await loadSavedState(guestUser);
+                this.unlockApp();
+                showToast(`Welcome Explorer #${guestId}! Instant demo session active.`, 'sparkles');
+                playSound('success');
+
+                // Non-blocking sync with backend
+                fetch('/api/auth/oauth-login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(guestUser)
+                }).catch(() => {});
+            } catch (err) {
+                console.error('[Guest Login Error]:', err);
+                this.unlockApp();
             }
+        },
 
-            // If real GitHub OAuth credentials exist, redirect with prompt=consent
-            if (provider === 'github' && githubClientId) {
-                const githubAuthUrl = `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(githubClientId)}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=user:email&prompt=consent`;
-                window.location.href = githubAuthUrl;
-                return;
+        async handleDirectLogin(name, email) {
+            try {
+                this.hideAlert();
+                const cleanName = (name || '').trim() || `Explorer #${Math.floor(1000 + Math.random() * 9000)}`;
+                const cleanEmail = (email || '').trim().toLowerCase() || `direct_${Date.now().toString(36)}@shiviai.demo`;
+                const initials = cleanName.split(' ').map(n => n[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() || 'U';
+
+                const directUser = {
+                    name: cleanName,
+                    email: cleanEmail,
+                    provider: 'email',
+                    avatar: initials
+                };
+                const directToken = `direct_token_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+                localStorage.removeItem('shivi_signed_out');
+                localStorage.setItem('shivi_current_user', JSON.stringify(directUser));
+                localStorage.setItem('shivi_active_token', directToken);
+                localStorage.setItem('current_user', JSON.stringify(directUser));
+                localStorage.setItem('shivi_user', JSON.stringify(directUser));
+                localStorage.setItem('auth_token', directToken);
+                localStorage.setItem('shivi_auth_token', directToken);
+
+                state.auth.user = directUser;
+                state.auth.token = directToken;
+                state.auth.isAuthenticated = true;
+                state.auth.isLoading = false;
+                state.activeView = 'chat';
+
+                this.closeAccountChooser();
+                await loadSavedState(directUser);
+                this.unlockApp();
+                showToast(`Welcome to ShiviAI, ${cleanName}!`, 'sparkles');
+                playSound('success');
+
+                fetch('/api/auth/oauth-login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(directUser)
+                }).catch(() => {});
+            } catch (err) {
+                console.error('[Direct Login Error]:', err);
+                this.showAlert(err.message || 'Direct login failed.', 'error');
+            }
+        },
+
+        openAccountChooser(provider = 'google') {
+            const googleClientId = (state.backendConfig && state.backendConfig.googleClientId) || '';
+            const githubClientId = (state.backendConfig && state.backendConfig.githubClientId) || '';
+            const redirectUri = this.getDynamicOAuthRedirectUri();
+
+            try {
+                // If real Google OAuth credentials exist, redirect with prompt=select_account
+                if (provider === 'google' && googleClientId) {
+                    const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(googleClientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=token&scope=email%20profile&prompt=select_account`;
+                    window.location.href = googleAuthUrl;
+                    return;
+                }
+
+                // If real GitHub OAuth credentials exist, redirect with prompt=consent
+                if (provider === 'github' && githubClientId) {
+                    const githubAuthUrl = `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(githubClientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=user:email&prompt=consent`;
+                    window.location.href = githubAuthUrl;
+                    return;
+                }
+            } catch (oauthErr) {
+                console.warn('[Auth] Dynamic OAuth initiation error:', oauthErr);
+                const errorMsg = 'OAuth service unavailable on this link. You can Continue as Guest or sign in with email.';
+                showToast(errorMsg, 'alert');
+                this.showAlert(errorMsg, 'info');
             }
 
             // Otherwise, render the sleek Account Chooser prompt modal (Mock / Development Fallback)
@@ -1276,110 +1434,70 @@ Identity Directive:
         },
 
         async checkSession() {
-            // 1. Check OAuth token callback in window.location.hash
-            if (window.location.hash && window.location.hash.includes('access_token=')) {
-                try {
-                    const hashParams = new URLSearchParams(window.location.hash.substring(1));
-                    const accessToken = hashParams.get('access_token');
-                    if (accessToken) {
-                        const googleRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-                            headers: { 'Authorization': `Bearer ${accessToken}` }
-                        });
-                        if (googleRes.ok) {
-                            const profile = await googleRes.json();
-                            const userObj = {
-                                name: profile.name || profile.email.split('@')[0],
-                                email: profile.email,
-                                provider: 'google',
-                                avatar: profile.picture || profile.name.slice(0, 2).toUpperCase()
-                            };
-                            await this.oauthLogin(userObj);
-                            history.replaceState(null, '', window.location.pathname + window.location.search);
-                            return;
+            try {
+                // 1. Detect OAuth redirect errors (e.g. invalid client ID, redirect_uri_mismatch on deployed link)
+                const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams();
+                const hashStr = (typeof window !== 'undefined' && window.location.hash) ? (window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash) : '';
+                const hashParams = new URLSearchParams(hashStr);
+
+                const oauthError = urlParams.get('error') || hashParams.get('error') || urlParams.get('error_description') || hashParams.get('error_description');
+                if (oauthError) {
+                    console.warn('[Auth] OAuth error callback detected in URL:', oauthError);
+                    try {
+                        history.replaceState(null, '', window.location.pathname);
+                    } catch (e) {}
+                    const errorMsg = 'OAuth service unavailable on this link. You can Continue as Guest or sign in with email.';
+                    showToast(errorMsg, 'alert');
+                    this.showAlert(errorMsg, 'info');
+                }
+
+                // 2. Direct / Instant Guest link parameter (?guest=1, ?demo=1, ?instant=1)
+                if (urlParams.get('guest') === '1' || urlParams.get('demo') === '1' || urlParams.get('instant') === '1') {
+                    console.log('[Auth] Instant demo parameter detected in URL');
+                    try {
+                        history.replaceState(null, '', window.location.pathname);
+                    } catch (e) {}
+                    await this.handleGuestLogin();
+                    return;
+                }
+
+                // 3. Check OAuth token callback in window.location.hash
+                if (hashStr && hashStr.includes('access_token=')) {
+                    try {
+                        const accessToken = hashParams.get('access_token');
+                        if (accessToken) {
+                            const googleRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+                                headers: { 'Authorization': `Bearer ${accessToken}` }
+                            });
+                            if (googleRes.ok) {
+                                const profile = await googleRes.json();
+                                const userObj = {
+                                    name: profile.name || (profile.email ? profile.email.split('@')[0] : 'Explorer'),
+                                    email: profile.email,
+                                    provider: 'google',
+                                    avatar: profile.picture || (profile.name ? profile.name.slice(0, 2).toUpperCase() : 'U')
+                                };
+                                await this.oauthLogin(userObj);
+                                try {
+                                    history.replaceState(null, '', window.location.pathname + window.location.search);
+                                } catch (e) {}
+                                return;
+                            } else {
+                                const errorMsg = 'OAuth service unavailable on this link. You can Continue as Guest or sign in with email.';
+                                showToast(errorMsg, 'alert');
+                                this.showAlert(errorMsg, 'info');
+                            }
                         }
+                    } catch (hashErr) {
+                        console.warn('[Auth] Error parsing OAuth token in hash:', hashErr);
+                        const errorMsg = 'OAuth service unavailable on this link. You can Continue as Guest or sign in with email.';
+                        showToast(errorMsg, 'alert');
+                        this.showAlert(errorMsg, 'info');
                     }
-                } catch (hashErr) {
-                    console.warn('[Auth] Error parsing OAuth token in hash:', hashErr);
                 }
-            }
 
-            // 2. Check if explicitly signed out
-            if (localStorage.getItem('shivi_signed_out') === 'true') {
-                state.auth.user = null;
-                state.auth.token = null;
-                state.auth.isAuthenticated = false;
-                state.auth.isLoading = false;
-                state.sessions = [];
-                state.currentSessionId = null;
-                if (elements.messagesList) elements.messagesList.innerHTML = '';
-                if (elements.historyList) elements.historyList.innerHTML = '';
-                state.activeView = 'auth';
-                this.showAuthGuard();
-                this.updateUI();
-                return;
-            }
-
-            // 3. Check for existing session token
-            const token = localStorage.getItem('auth_token') || localStorage.getItem('shivi_auth_token') || sessionStorage.getItem('shivi_auth_token');
-            const storedUserRaw = localStorage.getItem('current_user') || localStorage.getItem('shivi_user');
-
-            if (!token || !storedUserRaw) {
-                // Mandatory Auth Guard: No session -> Lock on login view
-                state.auth.user = null;
-                state.auth.token = null;
-                state.auth.isAuthenticated = false;
-                state.auth.isLoading = false;
-                state.sessions = [];
-                state.currentSessionId = null;
-                if (elements.messagesList) elements.messagesList.innerHTML = '';
-                if (elements.historyList) elements.historyList.innerHTML = '';
-                state.activeView = 'auth';
-                this.showAuthGuard();
-                this.updateUI();
-                return;
-            }
-
-            let parsedUser = null;
-            try {
-                parsedUser = JSON.parse(storedUserRaw);
-            } catch (e) {
-                parsedUser = null;
-            }
-
-            // 4. Verify token with backend
-            try {
-                const res = await fetch('/api/auth/me', {
-                    method: 'GET',
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-
-                if (res.ok) {
-                    const data = await res.json();
-                    state.auth.user = {
-                        name: data.user.name || (parsedUser && parsedUser.name) || 'Explorer',
-                        email: data.user.email || (parsedUser && parsedUser.email) || '',
-                        provider: data.user.provider || (parsedUser && parsedUser.provider) || 'email',
-                        avatar: data.user.avatar || (parsedUser && parsedUser.avatar) || 'U'
-                    };
-                    state.auth.token = token;
-                    state.auth.isAuthenticated = true;
-                    state.auth.isLoading = false;
-                    state.activeView = 'chat';
-                    this.unlockApp();
-                } else if (parsedUser) {
-                    // Offline fallback if token was previously saved
-                    state.auth.user = parsedUser;
-                    state.auth.token = token;
-                    state.auth.isAuthenticated = true;
-                    state.auth.isLoading = false;
-                    state.activeView = 'chat';
-                    this.unlockApp();
-                } else {
-                    localStorage.removeItem('auth_token');
-                    localStorage.removeItem('shivi_auth_token');
-                    localStorage.removeItem('current_user');
-                    localStorage.removeItem('shivi_user');
-                    sessionStorage.clear();
+                // 4. Check if explicitly signed out
+                if (localStorage.getItem('shivi_signed_out') === 'true') {
                     state.auth.user = null;
                     state.auth.token = null;
                     state.auth.isAuthenticated = false;
@@ -1391,16 +1509,20 @@ Identity Directive:
                     state.activeView = 'auth';
                     this.showAuthGuard();
                     this.updateUI();
+                    return;
                 }
-            } catch (err) {
-                if (parsedUser) {
-                    state.auth.user = parsedUser;
-                    state.auth.token = token;
-                    state.auth.isAuthenticated = true;
-                    state.auth.isLoading = false;
-                    state.activeView = 'chat';
-                    this.unlockApp();
-                } else {
+
+                // 5. Check for existing session token & stored user
+                const token = localStorage.getItem('shivi_active_token') ||
+                              localStorage.getItem('auth_token') || 
+                              localStorage.getItem('shivi_auth_token') || 
+                              sessionStorage.getItem('shivi_auth_token');
+                const storedUserRaw = localStorage.getItem('shivi_current_user') ||
+                                      localStorage.getItem('current_user') || 
+                                      localStorage.getItem('shivi_user');
+
+                if (!token || !storedUserRaw) {
+                    // Safe entry guard: Display clean Glassmorphic Auth Portal
                     state.auth.user = null;
                     state.auth.token = null;
                     state.auth.isAuthenticated = false;
@@ -1412,7 +1534,111 @@ Identity Directive:
                     state.activeView = 'auth';
                     this.showAuthGuard();
                     this.updateUI();
+                    return;
                 }
+
+                let parsedUser = null;
+                try {
+                    parsedUser = JSON.parse(storedUserRaw);
+                } catch (e) {
+                    parsedUser = null;
+                }
+
+                if (!parsedUser) {
+                    this.showAuthGuard();
+                    return;
+                }
+
+                // 6. Fast-path for Guest / Direct sessions (zero network latency)
+                if (parsedUser.provider === 'guest' || (token && token.startsWith('guest_')) || (token && token.startsWith('direct_'))) {
+                    state.auth.user = parsedUser;
+                    state.auth.token = token;
+                    state.auth.isAuthenticated = true;
+                    state.auth.isLoading = false;
+                    state.activeView = 'chat';
+                    this.unlockApp();
+                    return;
+                }
+
+                // 7. Verify persistent session token with backend (with safe offline fallback)
+                try {
+                    const res = await fetch('/api/auth/me', {
+                        method: 'GET',
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+
+                    if (res.ok) {
+                        const data = await res.json();
+                        state.auth.user = {
+                            name: data.user.name || parsedUser.name || 'Explorer',
+                            email: data.user.email || parsedUser.email || '',
+                            provider: data.user.provider || parsedUser.provider || 'email',
+                            avatar: data.user.avatar || parsedUser.avatar || 'U'
+                        };
+                        state.auth.token = token;
+                        state.auth.isAuthenticated = true;
+                        state.auth.isLoading = false;
+                        state.activeView = 'chat';
+                        this.unlockApp();
+                    } else if (parsedUser) {
+                        // Offline or local development fallback
+                        state.auth.user = parsedUser;
+                        state.auth.token = token;
+                        state.auth.isAuthenticated = true;
+                        state.auth.isLoading = false;
+                        state.activeView = 'chat';
+                        this.unlockApp();
+                    } else {
+                        localStorage.removeItem('auth_token');
+                        localStorage.removeItem('shivi_auth_token');
+                        localStorage.removeItem('shivi_active_token');
+                        localStorage.removeItem('current_user');
+                        localStorage.removeItem('shivi_user');
+                        localStorage.removeItem('shivi_current_user');
+                        sessionStorage.clear();
+                        state.auth.user = null;
+                        state.auth.token = null;
+                        state.auth.isAuthenticated = false;
+                        state.auth.isLoading = false;
+                        state.sessions = [];
+                        state.currentSessionId = null;
+                        if (elements.messagesList) elements.messagesList.innerHTML = '';
+                        if (elements.historyList) elements.historyList.innerHTML = '';
+                        state.activeView = 'auth';
+                        this.showAuthGuard();
+                        this.updateUI();
+                    }
+                } catch (err) {
+                    if (parsedUser) {
+                        state.auth.user = parsedUser;
+                        state.auth.token = token;
+                        state.auth.isAuthenticated = true;
+                        state.auth.isLoading = false;
+                        state.activeView = 'chat';
+                        this.unlockApp();
+                    } else {
+                        state.auth.user = null;
+                        state.auth.token = null;
+                        state.auth.isAuthenticated = false;
+                        state.auth.isLoading = false;
+                        state.sessions = [];
+                        state.currentSessionId = null;
+                        if (elements.messagesList) elements.messagesList.innerHTML = '';
+                        if (elements.historyList) elements.historyList.innerHTML = '';
+                        state.activeView = 'auth';
+                        this.showAuthGuard();
+                        this.updateUI();
+                    }
+                }
+            } catch (fatalSessionErr) {
+                console.error('[Auth Guard Exception]:', fatalSessionErr);
+                state.auth.user = null;
+                state.auth.token = null;
+                state.auth.isAuthenticated = false;
+                state.auth.isLoading = false;
+                state.activeView = 'auth';
+                this.showAuthGuard();
+                this.updateUI();
             }
         }
     };
@@ -2609,6 +2835,338 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
         stopSpeakingVoice();
     }
 
+    // =========================================================================
+    // GEMINI & CHATGPT STYLE LIVE CONTINUOUS VOICE CONVERSATION CONTROLLER
+    // =========================================================================
+
+    function populateVoiceSpeakerDropdown(targetLang = null) {
+        if (!elements.voiceSpeakerSelect || !window.voiceService) return;
+        const currentLang = targetLang || (elements.voiceLanguageSelect ? elements.voiceLanguageSelect.value : 'en-IN');
+        const voices = window.voiceService.getAvailableVoices(currentLang);
+
+        elements.voiceSpeakerSelect.innerHTML = '';
+        if (!voices || voices.length === 0) {
+            const opt = document.createElement('option');
+            opt.value = '';
+            opt.textContent = 'Default Voice';
+            elements.voiceSpeakerSelect.appendChild(opt);
+            return;
+        }
+
+        voices.forEach(voice => {
+            const opt = document.createElement('option');
+            opt.value = voice.voiceURI || voice.name;
+            opt.textContent = voice.isNeural ? voice.name : `${voice.name} (${voice.lang})`;
+            elements.voiceSpeakerSelect.appendChild(opt);
+        });
+
+        if (window.voiceService.selectedVoiceKey && window.voiceService.selectedVoiceKey !== 'auto') {
+            elements.voiceSpeakerSelect.value = window.voiceService.selectedVoiceKey;
+        } else if (window.voiceService.selectedVoice) {
+            elements.voiceSpeakerSelect.value = window.voiceService.selectedVoice.voiceURI || window.voiceService.selectedVoice.name;
+        }
+    }
+
+    function updateLiveVoiceOverlayStateUI(stateName) {
+        if (!elements.voiceOrbContainer || !elements.voiceStatusPill) return;
+
+        // 1. Orb Visualizer State
+        elements.voiceOrbContainer.className = `voice-orb-container state-${stateName}`;
+
+        // 2. Status Pill Indicator
+        elements.voiceStatusPill.className = `voice-status-pill status-${stateName}`;
+        const statusMap = {
+            listening: 'Listening...',
+            thinking: 'Thinking...',
+            speaking: 'Speaking...',
+            paused: 'Paused',
+            idle: 'Ready'
+        };
+        if (elements.voiceStatusText) {
+            elements.voiceStatusText.textContent = statusMap[stateName] || 'Live Voice';
+        }
+
+        // 3. Stage Subtitle Hint
+        const hintMap = {
+            listening: 'Listening to your voice... Speak naturally hands-free.',
+            thinking: 'Analyzing context and synthesizing response...',
+            speaking: 'Shivi is speaking. Tap orb or Interrupt to barge in.',
+            paused: 'Conversation paused. Tap Resume to continue.',
+            idle: 'Tap anywhere or speak to begin.'
+        };
+        if (elements.voiceStageHint) {
+            elements.voiceStageHint.textContent = hintMap[stateName] || 'Hands-free two-way conversation mode';
+        }
+
+        // 4. Orb Center Icon Dynamic Transition
+        if (elements.orbCenterIcon) {
+            const iconMap = {
+                listening: 'mic',
+                thinking: 'sparkles',
+                speaking: 'volume-2',
+                paused: 'pause',
+                idle: 'radio'
+            };
+            elements.orbCenterIcon.setAttribute('data-lucide', iconMap[stateName] || 'mic');
+            if (window.lucide) lucide.createIcons();
+        }
+
+        // 5. Update Pause Button Label
+        if (elements.voicePauseResumeLabel && elements.voicePauseResumeIcon) {
+            const isPaused = stateName === 'paused';
+            elements.voicePauseResumeLabel.textContent = isPaused ? 'Resume' : 'Pause';
+            elements.voicePauseResumeIcon.setAttribute('data-lucide', isPaused ? 'play' : 'pause');
+            if (window.lucide) lucide.createIcons();
+        }
+    }
+
+    function updateLiveVoiceTranscriptUI(speaker, text, isInterim = false) {
+        if (!elements.voiceTranscriptCard || !elements.voiceTranscriptText) return;
+
+        elements.voiceTranscriptCard.classList.remove('user-speaking', 'bot-speaking');
+        elements.voiceTranscriptCard.classList.add(speaker === 'user' ? 'user-speaking' : 'bot-speaking');
+
+        if (elements.speakerName) {
+            elements.speakerName.textContent = speaker === 'user' ? (isInterim ? 'You (speaking...)' : 'You') : 'Shivi AI';
+        }
+        if (elements.speakerIcon) {
+            elements.speakerIcon.setAttribute('data-lucide', speaker === 'user' ? 'user' : 'sparkles');
+            if (window.lucide) lucide.createIcons();
+        }
+
+        elements.voiceTranscriptText.textContent = text || (speaker === 'user' ? 'Listening...' : 'Thinking...');
+    }
+
+    async function handleLiveVoiceUserUtterance(userSpeech) {
+        if (!userSpeech || !userSpeech.trim()) return;
+        const cleanUserSpeech = userSpeech.trim();
+
+        // 1. Show user speech in Voice Overlay Subtitle Card
+        updateLiveVoiceTranscriptUI('user', cleanUserSpeech, false);
+
+        // 2. Add to active Chat Session in the main UI
+        let session = getCurrentSession();
+        if (!session) {
+            session = createNewSession();
+        }
+
+        const userMsg = {
+            id: 'msg_' + Date.now(),
+            role: 'user',
+            content: cleanUserSpeech,
+            timestamp: new Date().toISOString()
+        };
+        session.messages.push(userMsg);
+        saveState();
+
+        if (elements.welcomeHero) elements.welcomeHero.style.display = 'none';
+        appendMessageToDOM(userMsg, session.messages.length - 1);
+        scrollToBottom();
+
+        // 3. Set overlay state to 'thinking'
+        if (window.voiceService) {
+            window.voiceService.setConversationState('thinking');
+        }
+        updateLiveVoiceTranscriptUI('assistant', 'Thinking...');
+
+        // 4. Retrieve knowledge base context & chat history
+        const knowledgeContext = retrieveBrainKnowledge(cleanUserSpeech);
+        const history = (session.messages || []).slice(0, -1).map(m => ({
+            role: m.role,
+            content: m.content
+        }));
+
+        try {
+            let aiReply = '';
+            // Check identity or query live AI
+            if (isIdentityQuery(cleanUserSpeech)) {
+                aiReply = IDENTITY_DIRECT_REPLY;
+            } else if (state.brainProvider !== 'builtin' || state.backendConfig.isOnline) {
+                aiReply = await queryLiveAI(cleanUserSpeech, knowledgeContext, history, []);
+            } else if (window.ShiviBrain) {
+                const brainRes = await window.ShiviBrain.ask({
+                    message: cleanUserSpeech,
+                    provider: state.brainProvider,
+                    apiKey: state.apiKeys[state.brainProvider],
+                    model: state.apiModels[state.brainProvider],
+                    persona: state.currentPersona,
+                    systemPrompt: state.systemInstructions,
+                    history: history,
+                    knowledgeContext: knowledgeContext
+                });
+                aiReply = brainRes.reply;
+            } else {
+                aiReply = generateShiviResponse(cleanUserSpeech, knowledgeContext);
+            }
+
+            if (!aiReply || !aiReply.trim()) {
+                aiReply = "I understand. How else can I assist you?";
+            }
+
+            // 5. Append AI message to Chat Session
+            const aiMsg = {
+                id: 'msg_' + Date.now(),
+                role: 'assistant',
+                content: aiReply,
+                timestamp: new Date().toISOString()
+            };
+            session.messages.push(aiMsg);
+            saveState();
+            appendMessageToDOM(aiMsg, session.messages.length - 1);
+            scrollToBottom();
+            playSound('receive');
+
+            // 6. Update Voice Overlay Transcript
+            updateLiveVoiceTranscriptUI('assistant', aiReply);
+
+            // 7. Transition to speaking state and speak aloud
+            if (window.voiceService && window.voiceService.isContinuousMode) {
+                window.voiceService.speak(aiReply, () => {
+                    // Trigger continuous re-arming on completion!
+                    if (window.voiceService && window.voiceService.isContinuousMode) {
+                        window.voiceService.onAiResponseFinished();
+                    }
+                }, aiMsg.id);
+            } else {
+                speakText(aiReply, aiMsg.id);
+            }
+
+        } catch (err) {
+            console.error('[Live Voice] Generation error:', err);
+            const errReply = "I ran into a connection issue. Could you please say that again?";
+            updateLiveVoiceTranscriptUI('assistant', errReply);
+            if (window.voiceService && window.voiceService.isContinuousMode) {
+                window.voiceService.speak(errReply, () => {
+                    window.voiceService.onAiResponseFinished();
+                });
+            }
+        }
+    }
+
+    function openLiveVoiceOverlay() {
+        stopSpeakingVoice();
+        stopRecording();
+
+        const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRec) {
+            showToast('Voice mode requires a Web Speech API compatible browser (Chrome, Edge, Safari).', 'alert-circle');
+            return;
+        }
+
+        if (!elements.voiceOverlay) return;
+
+        // Populate voices & sync language
+        const initialLang = elements.voiceLanguageSelect ? elements.voiceLanguageSelect.value : 'en-IN';
+        if (window.voiceService) {
+            window.voiceService.setLanguage(initialLang);
+        }
+        populateVoiceSpeakerDropdown(initialLang);
+
+        // Display modal
+        elements.voiceOverlay.style.display = 'flex';
+        void elements.voiceOverlay.offsetWidth;
+        elements.voiceOverlay.classList.add('active');
+
+        // Reset UI text & indicators
+        updateLiveVoiceOverlayStateUI('listening');
+        updateLiveVoiceTranscriptUI('assistant', 'Shivi is listening. Speak anything to begin...');
+
+        if (elements.voiceMuteMicBtn) {
+            elements.voiceMuteMicBtn.classList.remove('active');
+            if (elements.voiceMuteLabel) elements.voiceMuteLabel.textContent = 'Mic On';
+            if (elements.voiceMuteIcon) elements.voiceMuteIcon.setAttribute('data-lucide', 'mic');
+        }
+
+        // Start continuous two-way loop
+        if (window.voiceService) {
+            window.voiceService.startContinuousMode({
+                onUserMessage: async (userSpeech) => {
+                    await handleLiveVoiceUserUtterance(userSpeech);
+                },
+                onTranscriptUpdate: (interimText) => {
+                    updateLiveVoiceTranscriptUI('user', interimText, true);
+                },
+                onStateChange: (newState) => {
+                    updateLiveVoiceOverlayStateUI(newState);
+                },
+                onError: (err) => {
+                    console.warn('[Live Voice] Service notice:', err);
+                }
+            });
+        }
+
+        playSound('click');
+        showToast('Live Hands-Free Voice Mode Active', 'radio');
+    }
+
+    function closeLiveVoiceOverlay() {
+        if (!elements.voiceOverlay) return;
+
+        if (window.voiceService) {
+            window.voiceService.stopContinuousMode();
+        }
+
+        elements.voiceOverlay.classList.remove('active');
+        setTimeout(() => {
+            elements.voiceOverlay.style.display = 'none';
+        }, 300);
+
+        showToast('Live Voice Session Ended', 'phone-off');
+    }
+
+    function toggleLiveVoiceMute() {
+        if (!window.voiceService) return;
+        const isMuted = window.voiceService.toggleMicMute();
+        if (elements.voiceMuteMicBtn) {
+            elements.voiceMuteMicBtn.classList.toggle('active', isMuted);
+            if (elements.voiceMuteLabel) {
+                elements.voiceMuteLabel.textContent = isMuted ? 'Mic Muted' : 'Mic On';
+            }
+            if (elements.voiceMuteIcon) {
+                elements.voiceMuteIcon.setAttribute('data-lucide', isMuted ? 'mic-off' : 'mic');
+                if (window.lucide) lucide.createIcons();
+            }
+        }
+        showToast(isMuted ? 'Microphone Muted' : 'Microphone Unmuted', isMuted ? 'mic-off' : 'mic');
+    }
+
+    function interruptVoicePlayback() {
+        if (!window.voiceService) return;
+        window.voiceService.interruptBotSpeech();
+        updateLiveVoiceOverlayStateUI('listening');
+        updateLiveVoiceTranscriptUI('assistant', 'Interrupted. Listening to you...');
+        showToast('Interrupted Shivi', 'square');
+    }
+
+    function toggleLiveVoicePause() {
+        if (!window.voiceService) return;
+        if (window.voiceService.conversationState === 'paused') {
+            window.voiceService.resumeContinuousListening();
+            updateLiveVoiceOverlayStateUI('listening');
+            showToast('Voice session resumed', 'play');
+        } else {
+            window.voiceService.pauseContinuousMode();
+            updateLiveVoiceOverlayStateUI('paused');
+            showToast('Voice session paused', 'pause');
+        }
+    }
+
+    function handleOrbClick() {
+        if (!window.voiceService) return;
+        // If Shivi is currently speaking, clicking the orb barges in (interrupts)
+        if (window.voiceService.isSpeaking) {
+            interruptVoicePlayback();
+            return;
+        }
+        // If paused, resumes
+        if (window.voiceService.conversationState === 'paused') {
+            toggleLiveVoicePause();
+            return;
+        }
+        // If listening, plays gentle feedback click
+        playSound('click');
+    }
+
     // ==========================================
     // UI RENDERING FUNCTIONS
     // ==========================================
@@ -2772,12 +3330,24 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
         const slideObj = slide || {};
         const rawTitle = slideObj.title || slideObj.slide_title || '';
         const keySubject = String(rawTitle).replace(/[^a-zA-Z0-9 ]/g, '').trim();
-        let specificContext = String(slideObj.image_prompt || slideObj.visual_description || slideObj.image_search_query || `${topic} ${keySubject}`).trim();
-        specificContext = specificContext.replace(/\b(abstract|surreal|geometric shapes|neon glow|digital wave|glowing swirls|3D data visualization|hologram)\b/gi, '').trim();
-        if (!specificContext) specificContext = `${topic} ${keySubject}`;
+
+        let specificContext = String(slideObj.image_prompt || slideObj.visual_description || slideObj.image_search_query || '').trim();
+        if (!specificContext) {
+            let keyBullet = '';
+            if (Array.isArray(slideObj.bullets) && slideObj.bullets.length > 0) {
+                const firstB = String(slideObj.bullets[0]).replace(/^\*\*.*?\*\*:\s*/, '').replace(/[^a-zA-Z0-9 ]/g, '').trim();
+                keyBullet = firstB.slice(0, 60);
+            }
+            specificContext = `${topic} ${keySubject} ${keyBullet}`.trim() || `${topic} ${keySubject}`;
+        }
+
+        // Ban generic abstract or surreal buzzwords so photos remain strictly contextual
+        specificContext = specificContext.replace(/\b(abstract|surreal|geometric shapes|neon glow|digital wave|glowing swirls|3D data visualization|hologram|futuristic background)\b/gi, '').trim();
+        if (!specificContext) specificContext = `${topic} ${keySubject}`.trim() || `${topic} slide ${index}`;
 
         // Enforce realistic, documentary, or technical photography style matching the domain
-        const enhancedPrompt = `${specificContext}, high resolution documentary photography, editorial photo, realistic lighting, 4k, hyper-detailed, clean sharp focus, authentic context`;
+        const styleSuffix = 'high resolution documentary photography, editorial photo, realistic lighting, 4k, hyper-detailed, clean sharp focus, authentic context';
+        const enhancedPrompt = specificContext.includes('documentary photography') ? specificContext : `${specificContext}, ${styleSuffix}`;
 
         // Generate deterministic seed based on topic and slide index so images stay consistent
         const seed = Math.abs(hashCode(`${topic}_slide_${index}`));
@@ -5162,6 +5732,15 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
             return { type: 'PRESENTATION', topic: topic, slideCount: slideCount };
         }
 
+        // 3. Tool Call: Live Voice Continuous Hands-Free Mode
+        const isVoiceSlash = /^\/(voice|live|call|talk|speak|listen)\b/i.test(t);
+        const isVoiceNatural = /^(?:start|open|launch|enable|activate|switch\s+to)\s+(?:live\s+)?(?:voice|call|conversation|talk)(?:\s+mode)?$/i.test(t)
+            || /^(?:baat\s+karo|aawaz\s+se\s+baat\s+karo|voice\s+mode\s+chalu\s+karo)$/i.test(t);
+
+        if (isVoiceSlash || isVoiceNatural) {
+            return { type: 'LIVE_VOICE' };
+        }
+
         return { type: 'CHAT' };
     }
 
@@ -5360,6 +5939,14 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
 
         // 1. Agentic Tool Calling & Intent Detection
         const intent = detectIntent(text);
+
+        if (intent.type === 'LIVE_VOICE') {
+            elements.userInput.value = '';
+            elements.userInput.style.height = 'auto';
+            handleInputChange();
+            openLiveVoiceOverlay();
+            return;
+        }
 
         if (intent.type === 'IMAGE') {
             elements.userInput.value = '';
@@ -6986,6 +7573,89 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
             elements.sidebarBackdrop.addEventListener('click', closeSidebarOnMobile);
         }
 
+        // ==========================================
+        // LIVE CONTINUOUS VOICE MODE EVENT LISTENERS
+        // ==========================================
+        if (elements.headerLiveVoiceBtn) {
+            elements.headerLiveVoiceBtn.addEventListener('click', openLiveVoiceOverlay);
+        }
+        if (elements.startLiveVoiceBtn) {
+            elements.startLiveVoiceBtn.addEventListener('click', openLiveVoiceOverlay);
+        }
+        if (elements.popoverLiveVoiceBtn) {
+            elements.popoverLiveVoiceBtn.addEventListener('click', () => {
+                if (elements.userProfilePopover) elements.userProfilePopover.classList.remove('open');
+                openLiveVoiceOverlay();
+            });
+        }
+        if (elements.menuActionLiveVoice) {
+            elements.menuActionLiveVoice.addEventListener('click', () => {
+                if (elements.inputActionMenu) elements.inputActionMenu.classList.remove('open');
+                if (elements.actionMenuBtn) elements.actionMenuBtn.classList.remove('active');
+                openLiveVoiceOverlay();
+            });
+        }
+
+        // Live Voice Overlay Controls
+        if (elements.voiceCloseBtn) {
+            elements.voiceCloseBtn.addEventListener('click', closeLiveVoiceOverlay);
+        }
+        if (elements.voiceEndSessionBtn) {
+            elements.voiceEndSessionBtn.addEventListener('click', closeLiveVoiceOverlay);
+        }
+        if (elements.voiceMuteMicBtn) {
+            elements.voiceMuteMicBtn.addEventListener('click', toggleLiveVoiceMute);
+        }
+        if (elements.voiceInterruptBtn) {
+            elements.voiceInterruptBtn.addEventListener('click', interruptVoicePlayback);
+        }
+        if (elements.voicePauseResumeBtn) {
+            elements.voicePauseResumeBtn.addEventListener('click', toggleLiveVoicePause);
+        }
+        if (elements.voiceOrbContainer) {
+            elements.voiceOrbContainer.addEventListener('click', handleOrbClick);
+            elements.voiceOrbContainer.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleOrbClick();
+                }
+            });
+        }
+        if (elements.voiceLanguageSelect) {
+            elements.voiceLanguageSelect.addEventListener('change', (e) => {
+                const newLang = e.target.value;
+                if (window.voiceService) {
+                    window.voiceService.setLanguage(newLang);
+                }
+                populateVoiceSpeakerDropdown(newLang);
+                showToast(`Language set to ${newLang}`, 'languages');
+            });
+        }
+        if (elements.voiceSpeakerSelect) {
+            elements.voiceSpeakerSelect.addEventListener('change', (e) => {
+                const voiceVal = e.target.value;
+                if (window.voiceService) {
+                    window.voiceService.setSpeakerVoice(voiceVal);
+                    const cleanLabel = voiceVal.replace(/^neural_/, 'Neural ');
+                    showToast(`Voice set to: ${cleanLabel}`, 'volume-2');
+                }
+            });
+        }
+
+        // Close Voice Overlay on Escape
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && elements.voiceOverlay && elements.voiceOverlay.classList.contains('active')) {
+                closeLiveVoiceOverlay();
+            }
+        });
+
+        // Speech synthesis voice change event handler to refresh picker
+        if ('speechSynthesis' in window) {
+            window.speechSynthesis.onvoiceschanged = () => {
+                populateVoiceSpeakerDropdown();
+            };
+        }
+
         // Voice Input (Mic)
         if (elements.micBtn) {
             elements.micBtn.addEventListener('click', toggleRecording);
@@ -8260,6 +8930,9 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
         if (elements.authTabLogin) {
             elements.authTabLogin.addEventListener('click', () => Auth.switchTab('login'));
         }
+        if (elements.authTabDirect) {
+            elements.authTabDirect.addEventListener('click', () => Auth.switchTab('direct'));
+        }
         if (elements.authTabSignup) {
             elements.authTabSignup.addEventListener('click', () => Auth.switchTab('signup'));
         }
@@ -8268,6 +8941,50 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
         }
         if (elements.btnBackToLogin) {
             elements.btnBackToLogin.addEventListener('click', () => Auth.switchTab('login'));
+        }
+
+        // 1. CONTINUE AS GUEST / INSTANT DEMO (Zero-Friction Access)
+        if (elements.btnGuestAuth) {
+            elements.btnGuestAuth.addEventListener('click', (e) => {
+                if (e) e.preventDefault();
+                Auth.handleGuestLogin();
+            });
+        }
+        if (elements.btnGuestAuthTab) {
+            elements.btnGuestAuthTab.addEventListener('click', (e) => {
+                if (e) e.preventDefault();
+                Auth.handleGuestLogin();
+            });
+        }
+        if (elements.btnGuestChooser) {
+            elements.btnGuestChooser.addEventListener('click', (e) => {
+                if (e) e.preventDefault();
+                Auth.handleGuestLogin();
+            });
+        }
+        if (elements.closeAuthModalBtn) {
+            elements.closeAuthModalBtn.addEventListener('click', (e) => {
+                if (e) e.preventDefault();
+                Auth.handleGuestLogin();
+            });
+        }
+
+        // 3. SIMPLE EMAIL / DIRECT ACCESS FALLBACK
+        if (elements.btnDirectEnter) {
+            elements.btnDirectEnter.addEventListener('click', (e) => {
+                if (e) e.preventDefault();
+                const name = elements.directNameInput ? elements.directNameInput.value.trim() : '';
+                const email = elements.directEmailInput ? elements.directEmailInput.value.trim() : '';
+                Auth.handleDirectLogin(name, email);
+            });
+        }
+        if (elements.authDirectForm) {
+            elements.authDirectForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const name = elements.directFormName ? elements.directFormName.value.trim() : '';
+                const email = elements.directFormEmail ? elements.directFormEmail.value.trim() : '';
+                Auth.handleDirectLogin(name, email);
+            });
         }
 
         // Toggle Login Password Visibility

@@ -306,6 +306,13 @@ class PresentationRequest(BaseModel):
     model: Optional[str] = None
     apiKey: Optional[str] = None
 
+class TTSRequest(BaseModel):
+    text: str
+    voice: Optional[str] = "nova"
+    model: Optional[str] = "tts-1"
+    speed: Optional[float] = 1.02
+    apiKey: Optional[str] = None
+
 class SaveConfigRequest(BaseModel):
     geminiKey: Optional[str] = None
     groqKey: Optional[str] = None
@@ -1097,21 +1104,39 @@ def hash_code(s: str) -> int:
     return h
 
 def build_contextual_slide_image_url(slide: dict, topic: str, index: int) -> str:
-    key_subject = re.sub(r'[^a-zA-Z0-9 ]', '', str(slide.get("title") or slide.get("slide_title") or "")).strip()
-    specific_context = str(slide.get("image_prompt") or slide.get("visual_description") or slide.get("image_search_query") or f"{topic} {key_subject}").strip()
-    specific_context = re.sub(r'\b(abstract|surreal|geometric shapes|neon glow|digital wave|glowing swirls|3D data visualization|hologram)\b', '', specific_context, flags=re.IGNORECASE).strip()
-    if not specific_context:
-        specific_context = f"{topic} {key_subject}"
+    slide_obj = slide or {}
+    raw_title = str(slide_obj.get("title") or slide_obj.get("slide_title") or "")
+    key_subject = re.sub(r'[^a-zA-Z0-9 ]', '', raw_title).strip()
 
-    enhanced_prompt = f"{specific_context}, high resolution documentary photography, editorial photo, realistic lighting, 4k, hyper-detailed, clean sharp focus, authentic context"
+    specific_context = str(slide_obj.get("image_prompt") or slide_obj.get("visual_description") or slide_obj.get("image_search_query") or "").strip()
+    if not specific_context:
+        key_bullet = ""
+        bullets = slide_obj.get("bullets")
+        if bullets and isinstance(bullets, list) and len(bullets) > 0:
+            first_b = re.sub(r'^\*\*.*?\*\*:\s*', '', str(bullets[0]))
+            first_b = re.sub(r'[^a-zA-Z0-9 ]', '', first_b).strip()
+            key_bullet = first_b[:60]
+        specific_context = f"{topic} {key_subject} {key_bullet}".strip() if (key_subject or key_bullet) else f"{topic} {key_subject}".strip()
+
+    # Ban generic abstract or surreal buzzwords so photos remain strictly contextual
+    specific_context = re.sub(r'\b(abstract|surreal|geometric shapes|neon glow|digital wave|glowing swirls|3D data visualization|hologram|futuristic background)\b', '', specific_context, flags=re.IGNORECASE).strip()
+    if not specific_context:
+        specific_context = f"{topic} {key_subject}".strip() or f"{topic} slide {index}"
+
+    style_suffix = "high resolution documentary photography, editorial photo, realistic lighting, 4k, hyper-detailed, clean sharp focus, authentic context"
+    enhanced_prompt = specific_context if "documentary photography" in specific_context else f"{specific_context}, {style_suffix}"
+
     seed = abs(hash_code(f"{topic}_slide_{index}"))
     safe_encoded = urllib.parse.quote(enhanced_prompt)
-    return f"https://image.pollinations.ai/prompt/{safe_encoded}?width=900&height=550&nologo=true&seed=${seed}"
+    return f"https://image.pollinations.ai/prompt/{safe_encoded}?width=900&height=550&nologo=true&seed={seed}"
 
 def repair_truncated_json(json_str: str) -> Optional[dict]:
     if not json_str or not isinstance(json_str, str):
         return None
     text = re.sub(r'```(?:json)?', '', json_str, flags=re.IGNORECASE).replace('```', '').strip()
+    first_brace = text.find('{')
+    if first_brace != -1:
+        text = text[first_brace:].strip()
     try:
         return json.loads(text)
     except Exception:
@@ -1892,10 +1917,9 @@ def create_pptx_file_py(deck: dict) -> dict:
         img_box.line.color.rgb = accent_rgb
         img_box.line.width = Pt(1.2)
 
-        img_prompt = s.get("image_prompt") or s.get("visual_prompt") or f"{deck_title} {slide_title} 8k cinematic"
-        import urllib.parse
-        img_url = s.get("image_url") or f"https://image.pollinations.ai/prompt/{urllib.parse.quote(img_prompt)}?width=1200&height=800&nologo=true&seed={idx * 137 + 101}"
-        fallback_url = s.get("fallback_image_url") or f"https://picsum.photos/seed/{urllib.parse.quote(deck_title + str(idx))}/1200/800"
+        img_prompt = s.get("image_prompt") or s.get("visual_prompt") or f"{deck_title} {slide_title}"
+        img_url = s.get("image_url") or build_contextual_slide_image_url(s, deck_title, idx + 1)
+        fallback_url = s.get("fallback_image_url") or f"https://picsum.photos/seed/{abs(hash_code(f'{deck_title}_slide_{idx + 1}'))}/900/550"
 
         image_placed = False
         import urllib.request
@@ -1963,12 +1987,102 @@ def create_pptx_file_py(deck: dict) -> dict:
         "filePath": str(filepath)
     }
 
+def get_slide_chunks_py(total_count: int) -> list:
+    if total_count <= 6:
+        return [{"start": 1, "end": total_count}]
+    if total_count <= 10:
+        mid = (total_count + 1) // 2
+        return [
+            {"start": 1, "end": mid},
+            {"start": mid + 1, "end": total_count}
+        ]
+    if total_count <= 15:
+        return [
+            {"start": 1, "end": 5},
+            {"start": 6, "end": 10},
+            {"start": 11, "end": total_count}
+        ]
+    return [
+        {"start": 1, "end": 5},
+        {"start": 6, "end": 10},
+        {"start": 11, "end": 15},
+        {"start": 16, "end": total_count}
+    ]
+
+def build_chunk_prompt_py(chunk: dict, total_count: int, clean_topic: str) -> str:
+    start_s = chunk["start"]
+    end_s = chunk["end"]
+    is_first = (start_s == 1)
+    is_final = (end_s == total_count)
+    count_in_chunk = end_s - start_s + 1
+
+    if is_first and is_final:
+        role_desc = f"""- Slide 1: layout_type "title_hero", category "EXECUTIVE BRIEFING" (Authoritative Presentation Masterclass Title, 1-line scope subtitle, strategic intent).
+- Slide 2: layout_type "split_image_content", category "STRATEGIC OBJECTIVE" (Core Objectives, System Bottlenecks, Key Catalysts).
+- Slides 3 to {total_count - 1}: layout_type "split_image_content" (Deep-dive technical pillars: Architecture, Mechanisms, Data Topology, Performance).
+- Slide {total_count}: layout_type "split_image_content", category "STRATEGIC ROADMAP" (Phased Implementation Roadmap & Leadership Mandate)."""
+    elif is_first:
+        role_desc = f"""- Slide 1: layout_type "title_hero", category "EXECUTIVE BRIEFING" (Authoritative Presentation Masterclass Title, 1-line scope subtitle, strategic intent).
+- Slide 2: layout_type "split_image_content", category "STRATEGIC OBJECTIVE" (Core Objectives, System Bottlenecks, Key Catalysts).
+- Slides 3 to {end_s}: layout_type "split_image_content" (Deep-dive technical pillars: Architectural Foundation, Hardware/Compute Topology, Core Mechanics)."""
+    elif is_final:
+        role_desc = f"""- Slides {start_s} to {total_count - 1}: layout_type "split_image_content" (Advanced Deep Pillars: Security & Governance, Ecosystem Integrations, Unit Economics & ROI, Empirical Case Studies).
+- Slide {total_count}: layout_type "split_image_content", category "STRATEGIC ROADMAP" (Phased Implementation Roadmap, Actionable Milestones & Leadership Mandate)."""
+    else:
+        role_desc = f"""- Slides {start_s} to {end_s}: layout_type "split_image_content" (Advanced Pillars: Scalability Patterns, Telemetry, Latency Optimization, Edge Computing, Fault-Tolerance & Resilience)."""
+
+    layout_type_str = "title_hero" if is_first else "split_image_content"
+    cat_str = "EXECUTIVE BRIEFING" if is_first else "CORE PILLAR"
+
+    return f"""You are a Principal Presentation Architect and Executive Speechwriter.
+Generate an executive presentation deck on: "{clean_topic}".
+Generate exactly {count_in_chunk} cohesive, highly-structured slides (Slides {start_s} through {end_s} of {total_count}).
+
+### SLIDE ROLES FOR THIS BATCH:
+{role_desc}
+
+### MANDATORY REQUIREMENTS FOR EVERY SLIDE:
+1. 'slide_number': Exact integer number from {start_s} to {end_s}.
+2. 'layout_type': "title_hero" for Slide 1 only, otherwise "split_image_content".
+3. 'category': Distinct domain kicker in UPPERCASE (e.g. "EXECUTIVE BRIEFING", "STRATEGIC OBJECTIVE", "SYSTEM ARCHITECTURE", "DATA TOPOLOGY", "PERFORMANCE BENCHMARKS", "RISK GOVERNANCE", "STRATEGIC ROADMAP").
+4. 'title': Distinct, insightful heading. Do NOT repeat the bare topic name.
+5. 'subtitle': Contextual 1-line subtitle explaining the scope.
+6. 'objective': 1 clear sentence defining the strategic outcome of this slide.
+7. 'bullets': Exactly 3 to 4 detailed bullet points (15-25 words each, starting with bold keyword first e.g. "**Operational Velocity**: Eliminating manual pipeline handoffs to accelerate deployment velocity by up to 40%.").
+8. 'image_search_query': Specific, authentic real-world search query pinpointing the physical/factual subject of this slide (e.g. "mission control operations room telemetry wall engineers", NOT "technology").
+9. 'visual_description': In-depth documentary scene description of the real-world operational/technical setting grounded strictly in this slide's facts. Strictly NO abstract art, neon shapes, or fantasy graphics.
+10. 'image_prompt': High resolution documentary photography depicting the exact real-world subject in an authentic operational setting, realistic lighting, 4k, hyper-detailed, clean sharp focus.
+
+### STRICT JSON SCHEMA (OUTPUT ONLY VALID JSON, NO CODEBLOCKS):
+{{
+  "deck_title": "{clean_topic}: Executive Masterclass",
+  "topic": "{clean_topic}",
+  "slides": [
+    {{
+      "slide_number": {start_s},
+      "layout_type": "{layout_type_str}",
+      "category": "{cat_str}",
+      "title": "Distinct Slide Headline",
+      "subtitle": "Clear 1-line contextual subtitle",
+      "objective": "Strategic outcome or focus of this slide",
+      "bullets": [
+        "**Operational Velocity**: Detailed sentence explaining key impact and metrics with authentic depth.",
+        "**System Reliability**: Telemetry and automated guardrails safeguarding mission-critical production uptime.",
+        "**Scalable Invariants**: Modular decoupling ensuring predictable throughput as data density expands."
+      ],
+      "image_search_query": "specific realistic query for authentic operational subject",
+      "visual_description": "documentary scene description of real-world subject in authentic setting",
+      "image_prompt": "High resolution documentary photography of authentic subject in operational setting, realistic lighting, 4k, hyper-detailed, clean sharp focus"
+    }}
+  ]
+}}"""
+
 async def build_presentation_deck_py(topic: str, slide_count: Optional[int] = None, theme: str = "dark_modern", keys: dict = None) -> dict:
     if keys is None:
         keys = {}
 
     clean_topic = topic.strip()
-    total_count = min(20, max(5, int(slide_count) if (slide_count and str(slide_count).isdigit()) else 5))
+    total_count = min(20, max(5, int(slide_count) if (slide_count and str(slide_count).isdigit()) else 8))
 
     system_prompt = (
         "You are an Executive Presentation Architect and Principal AI Analyst. "
@@ -1979,11 +2093,12 @@ async def build_presentation_deck_py(topic: str, slide_count: Optional[int] = No
 
     async def execute_llm_prompt(current_prompt: str) -> Optional[dict]:
         provider_calls = []
+        if keys.get("groq"):
+            provider_calls.append(lambda: call_groq(keys["groq"], "openai/gpt-oss-120b", system_prompt, current_prompt, [], options={"max_tokens": 2500}))
+            provider_calls.append(lambda: call_groq(keys["groq"], "openai/gpt-oss-20b", system_prompt, current_prompt, [], options={"max_tokens": 2500}))
+            provider_calls.append(lambda: call_groq(keys["groq"], "qwen/qwen3.8-27b", system_prompt, current_prompt, [], options={"max_tokens": 950}))
         if keys.get("gemini"):
             provider_calls.append(lambda: call_gemini(keys["gemini"], "gemini-1.5-flash", system_prompt, current_prompt, [], options={"max_tokens": 8192}))
-        if keys.get("groq"):
-            provider_calls.append(lambda: call_groq(keys["groq"], "openai/gpt-oss-120b", system_prompt, current_prompt, [], options={"max_tokens": 3500}))
-            provider_calls.append(lambda: call_groq(keys["groq"], "qwen/qwen3.8-27b", system_prompt, current_prompt, [], options={"max_tokens": 3000}))
         if keys.get("openai"):
             provider_calls.append(lambda: call_openai(keys["openai"], "gpt-4o-mini", system_prompt, current_prompt, [], options={"max_tokens": 8192}))
         if keys.get("openrouter"):
@@ -2000,120 +2115,28 @@ async def build_presentation_deck_py(topic: str, slide_count: Optional[int] = No
                 print(f"[Presentation Provider Gen Warning]: {e}")
         return None
 
-    if total_count <= 10:
-        prompt = f"""You are a Principal Presentation Architect and Executive Speechwriter.
-Generate an executive presentation deck on the topic: "{clean_topic}".
-Generate exactly {total_count} cohesive, highly-structured slides.
+    # Dynamic Chunking for Zero Token Truncation (Max 5 slides per chunk)
+    chunks = get_slide_chunks_py(total_count)
+    tasks = [execute_llm_prompt(build_chunk_prompt_py(c, total_count, clean_topic)) for c in chunks]
+    chunk_results = await asyncio.gather(*tasks)
 
-### PRESENTATION ARCHITECTURE & SLIDE ROLES:
-1. Slide 1 (Title Slide):
-   - layout_type: "title_hero"
-   - category: "EXECUTIVE BRIEFING"
-   - title: Clean compelling presentation title
-   - subtitle: Clear, contextual 1-line subtitle explaining the scope
-   - objective: High-level goal of this presentation
-   - bullets: 2-3 strategic focus points (e.g. "**Strategic Intent**: ...", "**Target Audience**: ...", "**Presentation Standard**: Created with ShiviAI • Executive Keynote Widescreen Edition")
-   - image_search_query: Specific realistic query for authentic operational subject
-   - visual_description: Documentary scene description of real-world subject in authentic setting
-   - image_prompt: High resolution documentary photography of authentic {clean_topic} in operational setting, realistic lighting, 4k, hyper-detailed, clean sharp focus
-2. Slide 2 (Objectives & Executive Summary):
-   - layout_type: "split_image_content"
-   - category: "STRATEGIC OBJECTIVE"
-   - title: Key Objectives & Core Challenges
-   - subtitle: Navigating primary catalysts and resolving structural bottlenecks
-   - objective: Define measurable milestones and overcome existing structural bottlenecks
-   - bullets: 3 to 4 detailed, high-value bullet points (15-25 words each, bold keyword first e.g. "**Operational Efficiency**: Eliminating redundant manual workflows to reduce cycle times by up to 35% through orchestrated pipelines.")
-   - image_search_query: Mission critical control room telemetry dashboards monitoring {clean_topic}
-   - visual_description: Operations room engineers monitoring operational telemetry metrics
-   - image_prompt: High-tech operations control room engineers monitoring telemetry metrics for {clean_topic}, realistic lighting, documentary photography, 4k
-3. Slides 3 to {total_count - 1} (Deep-Dive Analysis / Core Pillars):
-   - layout_type: "split_image_content"
-   - category: Distinct domain kicker (e.g. "SYSTEM ARCHITECTURE", "HARDWARE & COMPUTE", "DATA TOPOLOGY", "SECURITY & ZERO-TRUST", "PERFORMANCE BENCHMARKS", "ECOSYSTEM INTEGRATION", "INDUSTRY VERTICALS", "CRITICAL BOTTLENECKS", "CAPITAL EFFICIENCY")
-   - title: Distinct, insightful Heading/Title (DO NOT repeat the topic name alone, provide real conceptual conclusions)
-   - subtitle: Clear contextual 1-line subtitle
-   - objective: Core outcome or focus of this pillar
-   - bullets: 3 to 4 detailed, high-value bullet points (15-25 words each, bold keyword first)
-   - image_search_query: Specific real-world physical subject matching this slide's concept
-   - visual_description: Technical documentary description of the specific subject
-   - image_prompt: Precise realistic documentary photography depicting the exact subject of this slide, clean sharp focus, 4k
-4. Slide {total_count} (Strategic Roadmap & Conclusion):
-   - layout_type: "split_image_content"
-   - category: "STRATEGIC ROADMAP"
-   - title: Phased Implementation & Actionable Conclusion
-   - subtitle: Phased rollout and leadership execution mandate
-   - objective: Deliver actionable immediate takeaways and clear next steps
-   - bullets: 3 to 4 detailed actionable takeaways (15-25 words each, bold keyword first e.g. "**Phase 1 Execution**: ...", "**Risk Governance**: ...", "**Measurable ROI**: ...")
-   - image_search_query: Technical project management sprint planning session for {clean_topic}
-   - visual_description: Cross-functional technical leaders collaborating at project roadmap planning wall
-   - image_prompt: Technical leaders collaborating at project roadmap planning wall for {clean_topic}, realistic lighting, documentary photography, 4k
+    combined_slides = []
+    deck_title = f"{clean_topic}: Executive Masterclass"
 
-### STRICT RULES:
-- Output ONLY valid JSON matching schema.
-- NO REPETITIVE PLACEHOLDERS: Do NOT output the topic name as bullet points or repeat generic filler. Every bullet point must contain authentic domain-specific insight.
-- EACH BULLET MUST HAVE 15-25 WORDS and START WITH A BOLD KEYWORD: e.g. "**Keyword**: Explanation..."
-- STRICT REALISTIC CONTEXTUAL PHOTOS (NO ABSTRACT ART): Every image prompt must depict realistic tangible subjects, documentary photography, 4k, realistic lighting.
+    for deck_result in chunk_results:
+        if deck_result and deck_result.get("deck_title"):
+            deck_title = deck_result["deck_title"]
+        if deck_result and isinstance(deck_result.get("slides"), list):
+            combined_slides.extend(deck_result["slides"])
 
-### STRICT JSON SCHEMA:
-{{
-  "deck_title": "Clean Presentation Title",
-  "topic": "{clean_topic}",
-  "slides": [
-    {{
-      "slide_number": 1,
-      "layout_type": "title_hero",
-      "category": "EXECUTIVE BRIEFING",
-      "title": "Main Compelling Title",
-      "subtitle": "Clear, contextual 1-line subtitle explaining the scope",
-      "objective": "High-level goal of this presentation",
-      "bullets": [
-        "**Strategic Intent**: High-level vision outlining the roadmap and expected deliverables.",
-        "**Target Audience**: Designed for cross-functional stakeholders, engineers, and leadership."
-      ],
-      "image_search_query": "specific realistic query",
-      "visual_description": "documentary scene description of real-world subject",
-      "image_prompt": "Documentary photography of authentic subject in realistic operational setting, 4k, clean sharp focus, realistic lighting"
-    }}
-  ]
-}}"""
-
-        single_deck = await execute_llm_prompt(prompt)
-        if single_deck and isinstance(single_deck.get("slides"), list) and len(single_deck["slides"]) > 0:
-            return normalize_presentation_deck(single_deck, clean_topic, total_count)
-    else:
-        # Two-Batch Generation for total_count > 10 (Avoids Token Truncation)
-        batch1_count = 10
-        batch2_count = total_count - batch1_count
-
-        prompt1 = f"""Generate Part 1 (Slides 1 to {batch1_count}) of an executive {total_count}-slide presentation deck on: "{clean_topic}".
-Slide 1 is title_hero (EXECUTIVE BRIEFING), Slide 2 is split_image_content (STRATEGIC OBJECTIVE), Slides 3 to {batch1_count} are deep architectural pillars.
-Every slide must have category, title, subtitle, objective, 3-4 bullets (15-25 words each, bold keyword first), image_search_query, visual_description, and image_prompt (realistic documentary photography, 4k).
-Output ONLY valid JSON: {{ "deck_title": "Clean Title", "topic": "{clean_topic}", "slides": [...] }}"""
-
-        prompt2 = f"""Generate Part 2 (Slides {batch1_count + 1} to {total_count}) continuing the executive presentation deck on: "{clean_topic}".
-Slides {batch1_count + 1} to {total_count - 1} are Advanced Pillars (Governance, Benchmarks, Case Studies, Bottlenecks, Mitigation, Economics).
-Slide {total_count} is STRATEGIC ROADMAP (Phased Implementation & Actionable Conclusion).
-Every slide must have category, title, subtitle, objective, 3-4 bullets (15-25 words each, bold keyword first), image_search_query, visual_description, and image_prompt (realistic documentary photography, 4k).
-Output ONLY valid JSON: {{ "deck_title": "Clean Title", "topic": "{clean_topic}", "slides": [...] }}"""
-
-        deck_part1, deck_part2 = await asyncio.gather(
-            execute_llm_prompt(prompt1),
-            execute_llm_prompt(prompt2)
-        )
-
-        combined_slides = []
-        if deck_part1 and isinstance(deck_part1.get("slides"), list):
-            combined_slides.extend(deck_part1["slides"])
-        if deck_part2 and isinstance(deck_part2.get("slides"), list):
-            combined_slides.extend(deck_part2["slides"])
-
-        if combined_slides:
-            merged_deck = {
-                "deck_title": (deck_part1 and deck_part1.get("deck_title")) or f"{clean_topic}: Executive Masterclass",
-                "topic": clean_topic,
-                "theme": theme,
-                "slides": combined_slides
-            }
-            return normalize_presentation_deck(merged_deck, clean_topic, total_count)
+    if combined_slides:
+        merged_deck = {
+            "deck_title": deck_title,
+            "topic": clean_topic,
+            "theme": theme,
+            "slides": combined_slides
+        }
+        return normalize_presentation_deck(merged_deck, clean_topic, total_count)
 
     return generate_rich_fallback_deck_py(clean_topic, total_count, theme)
 
@@ -2147,6 +2170,55 @@ async def generate_presentation(req: PresentationRequest):
         "filename": file_info["filename"],
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     }
+
+# ---------------------------------------------------------------------------
+# API: Neural Speech Synthesis (POST /api/tts)
+# ---------------------------------------------------------------------------
+@app.post("/api/tts")
+async def tts_endpoint(req: TTSRequest):
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Text parameter is required for TTS")
+
+    env = load_env_dict()
+    api_key = (req.apiKey or "").strip() or env.get("OPENAI_API_KEY", "").strip()
+    voice = (req.voice or "nova").replace("neural_", "")
+
+    if api_key:
+        try:
+            assert http_client is not None
+            res = await http_client.post(
+                "https://api.openai.com/v1/audio/speech",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": req.model or "tts-1",
+                    "input": text[:4096],
+                    "voice": voice,
+                    "speed": req.speed or 1.02
+                },
+                timeout=12.0
+            )
+            if res.status_code == 200:
+                return Response(
+                    content=res.content,
+                    media_type="audio/mpeg",
+                    headers={"Cache-Control": "public, max-age=86400"}
+                )
+        except Exception as e:
+            logger.warning(f"[TTS] OpenAI Speech notice: {e}")
+
+    # Seamless fallback response so frontend uses Pipeline A (Browser Neural Engine)
+    return JSONResponse(
+        status_code=200,
+        content={
+            "success": False,
+            "fallback": True,
+            "message": "Fallback to Pipeline A: High-Definition Natural Browser Voice"
+        }
+    )
 
 # ---------------------------------------------------------------------------
 # API: Authentication (Signup, Login, Me, Logout)

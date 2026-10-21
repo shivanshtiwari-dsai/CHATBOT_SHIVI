@@ -1149,21 +1149,118 @@ function generateRichFallbackDeck(topic, slideCount = null, theme = 'dark_modern
     }, cleanTopic, count);
 }
 
+function getSlideChunks(totalCount) {
+    if (totalCount <= 6) {
+        return [{ start: 1, end: totalCount }];
+    }
+    if (totalCount <= 10) {
+        const mid = Math.ceil(totalCount / 2);
+        return [
+            { start: 1, end: mid },
+            { start: mid + 1, end: totalCount }
+        ];
+    }
+    if (totalCount <= 15) {
+        return [
+            { start: 1, end: 5 },
+            { start: 6, end: 10 },
+            { start: 11, end: totalCount }
+        ];
+    }
+    return [
+        { start: 1, end: 5 },
+        { start: 6, end: 10 },
+        { start: 11, end: 15 },
+        { start: 16, end: totalCount }
+    ];
+}
+
+function buildChunkPrompt(chunk, totalCount, cleanTopic) {
+    const isFirstChunk = chunk.start === 1;
+    const isFinalChunk = chunk.end === totalCount;
+    const countInChunk = chunk.end - chunk.start + 1;
+
+    let roleDescription = '';
+    if (isFirstChunk && isFinalChunk) {
+        roleDescription = `
+- Slide 1: layout_type "title_hero", category "EXECUTIVE BRIEFING" (Authoritative Presentation Masterclass Title, 1-line scope subtitle, strategic intent).
+- Slide 2: layout_type "split_image_content", category "STRATEGIC OBJECTIVE" (Core Objectives, System Bottlenecks, Key Catalysts).
+- Slides 3 to ${totalCount - 1}: layout_type "split_image_content" (Deep-dive technical pillars: Architecture, Mechanisms, Data Topology, Performance).
+- Slide ${totalCount}: layout_type "split_image_content", category "STRATEGIC ROADMAP" (Phased Implementation Roadmap & Leadership Mandate).`;
+    } else if (isFirstChunk) {
+        roleDescription = `
+- Slide 1: layout_type "title_hero", category "EXECUTIVE BRIEFING" (Authoritative Presentation Masterclass Title, 1-line scope subtitle, strategic intent).
+- Slide 2: layout_type "split_image_content", category "STRATEGIC OBJECTIVE" (Core Objectives, System Bottlenecks, Key Catalysts).
+- Slides 3 to ${chunk.end}: layout_type "split_image_content" (Deep-dive technical pillars: Architectural Foundation, Hardware/Compute Topology, Core Mechanics).`;
+    } else if (isFinalChunk) {
+        roleDescription = `
+- Slides ${chunk.start} to ${totalCount - 1}: layout_type "split_image_content" (Advanced Deep Pillars: Security & Governance, Ecosystem Integrations, Unit Economics & ROI, Empirical Case Studies).
+- Slide ${totalCount}: layout_type "split_image_content", category "STRATEGIC ROADMAP" (Phased Implementation Roadmap, Actionable Milestones & Leadership Mandate).`;
+    } else {
+        roleDescription = `
+- Slides ${chunk.start} to ${chunk.end}: layout_type "split_image_content" (Advanced Pillars: Scalability Patterns, Telemetry, Latency Optimization, Edge Computing, Fault-Tolerance & Resilience).`;
+    }
+
+    return `You are a Principal Presentation Architect and Executive Speechwriter.
+Generate an executive presentation deck on: "${cleanTopic}".
+Generate exactly ${countInChunk} cohesive, highly-structured slides (Slides ${chunk.start} through ${chunk.end} of ${totalCount}).
+
+### SLIDE ROLES FOR THIS BATCH:
+${roleDescription}
+
+### MANDATORY REQUIREMENTS FOR EVERY SLIDE:
+1. 'slide_number': Exact integer number from ${chunk.start} to ${chunk.end}.
+2. 'layout_type': "title_hero" for Slide 1 only, otherwise "split_image_content".
+3. 'category': Distinct domain kicker in UPPERCASE (e.g. "EXECUTIVE BRIEFING", "STRATEGIC OBJECTIVE", "SYSTEM ARCHITECTURE", "DATA TOPOLOGY", "PERFORMANCE BENCHMARKS", "RISK GOVERNANCE", "STRATEGIC ROADMAP").
+4. 'title': Distinct, insightful heading. Do NOT repeat the bare topic name.
+5. 'subtitle': Contextual 1-line subtitle explaining the scope.
+6. 'objective': 1 clear sentence defining the strategic outcome of this slide.
+7. 'bullets': Exactly 3 to 4 detailed bullet points (15-25 words each, starting with bold keyword first e.g. "**Operational Velocity**: Eliminating manual pipeline handoffs to accelerate deployment velocity by up to 40%.").
+8. 'image_search_query': Specific, authentic real-world search query pinpointing the physical/factual subject of this slide (e.g. "mission control operations room telemetry wall engineers", NOT "technology").
+9. 'visual_description': In-depth documentary scene description of the real-world operational/technical setting grounded strictly in this slide's facts. Strictly NO abstract art, neon shapes, or fantasy graphics.
+10. 'image_prompt': High resolution documentary photography depicting the exact real-world subject in an authentic operational setting, realistic lighting, 4k, hyper-detailed, clean sharp focus.
+
+### STRICT JSON SCHEMA (OUTPUT ONLY VALID JSON, NO CODEBLOCKS):
+{
+  "deck_title": "${cleanTopic}: Executive Masterclass",
+  "topic": "${cleanTopic}",
+  "slides": [
+    {
+      "slide_number": ${chunk.start},
+      "layout_type": "${isFirstChunk ? 'title_hero' : 'split_image_content'}",
+      "category": "${isFirstChunk ? 'EXECUTIVE BRIEFING' : 'CORE PILLAR'}",
+      "title": "Distinct Slide Headline",
+      "subtitle": "Clear 1-line contextual subtitle",
+      "objective": "Strategic outcome or focus of this slide",
+      "bullets": [
+        "**Operational Velocity**: Detailed sentence explaining key impact and metrics with authentic depth.",
+        "**System Reliability**: Telemetry and automated guardrails safeguarding mission-critical production uptime.",
+        "**Scalable Invariants**: Modular decoupling ensuring predictable throughput as data density expands."
+      ],
+      "image_search_query": "specific realistic query for authentic operational subject",
+      "visual_description": "documentary scene description of real-world subject in authentic setting",
+      "image_prompt": "High resolution documentary photography of authentic subject in operational setting, realistic lighting, 4k, hyper-detailed, clean sharp focus"
+    }
+  ]
+}`;
+}
+
 async function buildPresentationDeck(topic, slideCount = null, theme = 'dark_modern', keys = {}) {
     const cleanTopic = String(topic || 'Topic Deep-Dive').trim();
-    const totalCount = Math.min(20, Math.max(5, (slideCount && !isNaN(slideCount)) ? parseInt(slideCount, 10) : 5));
+    const totalCount = Math.min(20, Math.max(5, (slideCount && !isNaN(slideCount)) ? parseInt(slideCount, 10) : 8));
 
     const systemPrompt = `You are an Executive Presentation Architect and Principal AI Analyst. Your task is to generate high-caliber, C-level presentation decks in strict JSON format. Strict adherence to the requested schema, slide count, bullet depth (15-25 words per bullet with bold keyword first), and documentary realistic photography prompts on every slide is mandatory. Output ONLY valid JSON with zero markdown codeblock wrappers.`;
 
     // Helper to query LLM providers with resilient fallback
     async function executeLlmPrompt(currentPrompt) {
         const providerCalls = [];
+        if (keys.groq) {
+            providerCalls.push(() => callGroq(keys.groq, 'openai/gpt-oss-120b', systemPrompt, currentPrompt, [], { max_tokens: 2500 }));
+            providerCalls.push(() => callGroq(keys.groq, 'openai/gpt-oss-20b', systemPrompt, currentPrompt, [], { max_tokens: 2500 }));
+            providerCalls.push(() => callGroq(keys.groq, 'qwen/qwen3.8-27b', systemPrompt, currentPrompt, [], { max_tokens: 950 }));
+        }
         if (keys.gemini) {
             providerCalls.push(() => callGemini(keys.gemini, 'gemini-1.5-flash', systemPrompt, currentPrompt, [], { max_tokens: 8192 }));
-        }
-        if (keys.groq) {
-            providerCalls.push(() => callGroq(keys.groq, 'openai/gpt-oss-120b', systemPrompt, currentPrompt, [], { max_tokens: 3500 }));
-            providerCalls.push(() => callGroq(keys.groq, 'qwen/qwen3.8-27b', systemPrompt, currentPrompt, [], { max_tokens: 3000 }));
         }
         if (keys.openai) {
             providerCalls.push(() => callOpenAI(keys.openai, 'gpt-4o-mini', systemPrompt, currentPrompt, [], { max_tokens: 8192 }));
@@ -1188,125 +1285,31 @@ async function buildPresentationDeck(topic, slideCount = null, theme = 'dark_mod
         return null;
     }
 
-    // Single Batch for totalCount <= 10
-    if (totalCount <= 10) {
-        const prompt = `You are a Principal Presentation Architect and Executive Speechwriter.
-Generate an executive presentation deck on the topic: "${cleanTopic}".
-Generate exactly ${totalCount} cohesive, highly-structured slides.
+    // Dynamic Chunking for Zero Token Truncation (Max 5 slides per chunk)
+    const chunks = getSlideChunks(totalCount);
+    const chunkPromises = chunks.map(chunk => executeLlmPrompt(buildChunkPrompt(chunk, totalCount, cleanTopic)));
+    const chunkResults = await Promise.all(chunkPromises);
 
-### PRESENTATION ARCHITECTURE & SLIDE ROLES:
-1. Slide 1 (Title Slide):
-   - layout_type: "title_hero"
-   - category: "EXECUTIVE BRIEFING"
-   - title: Clean compelling presentation title
-   - subtitle: Clear, contextual 1-line subtitle explaining the scope
-   - objective: High-level goal of this presentation
-   - bullets: 2-3 strategic focus points (e.g. "**Strategic Intent**: ...", "**Target Audience**: ...", "**Presentation Standard**: Created with ShiviAI • Executive Keynote Widescreen Edition")
-   - image_search_query: Specific realistic query for authentic operational subject
-   - visual_description: Documentary scene description of real-world subject in authentic setting
-   - image_prompt: High resolution documentary photography of authentic ${cleanTopic} in operational setting, realistic lighting, 4k, hyper-detailed, clean sharp focus
-2. Slide 2 (Objectives & Executive Summary):
-   - layout_type: "split_image_content"
-   - category: "STRATEGIC OBJECTIVE"
-   - title: Key Objectives & Core Challenges
-   - subtitle: Navigating primary catalysts and resolving structural bottlenecks
-   - objective: Define measurable milestones and overcome existing structural bottlenecks
-   - bullets: 3 to 4 detailed, high-value bullet points (15-25 words each, bold keyword first e.g. "**Operational Efficiency**: Eliminating redundant manual workflows to reduce cycle times by up to 35% through orchestrated pipelines.")
-   - image_search_query: Mission critical control room telemetry dashboards monitoring ${cleanTopic}
-   - visual_description: Operations room engineers monitoring operational telemetry metrics
-   - image_prompt: High-tech operations control room engineers monitoring telemetry metrics for ${cleanTopic}, realistic lighting, documentary photography, 4k
-3. Slides 3 to ${totalCount - 1} (Deep-Dive Analysis / Core Pillars):
-   - layout_type: "split_image_content"
-   - category: Distinct domain kicker (e.g. "SYSTEM ARCHITECTURE", "HARDWARE & COMPUTE", "DATA TOPOLOGY", "SECURITY & ZERO-TRUST", "PERFORMANCE BENCHMARKS", "ECOSYSTEM INTEGRATION", "INDUSTRY VERTICALS", "CRITICAL BOTTLENECKS", "CAPITAL EFFICIENCY")
-   - title: Distinct, insightful Heading/Title (DO NOT repeat the topic name alone, provide real conceptual conclusions)
-   - subtitle: Clear contextual 1-line subtitle
-   - objective: Core outcome or focus of this pillar
-   - bullets: 3 to 4 detailed, high-value bullet points (15-25 words each, bold keyword first)
-   - image_search_query: Specific real-world physical subject matching this slide's concept
-   - visual_description: Technical documentary description of the specific subject
-   - image_prompt: Precise realistic documentary photography depicting the exact subject of this slide, clean sharp focus, 4k
-4. Slide ${totalCount} (Strategic Roadmap & Conclusion):
-   - layout_type: "split_image_content"
-   - category: "STRATEGIC ROADMAP"
-   - title: Phased Implementation & Actionable Conclusion
-   - subtitle: Phased rollout and leadership execution mandate
-   - objective: Deliver actionable immediate takeaways and clear next steps
-   - bullets: 3 to 4 detailed actionable takeaways (15-25 words each, bold keyword first e.g. "**Phase 1 Execution**: ...", "**Risk Governance**: ...", "**Measurable ROI**: ...")
-   - image_search_query: Technical project management sprint planning session for ${cleanTopic}
-   - visual_description: Cross-functional technical leaders collaborating at project roadmap planning wall
-   - image_prompt: Technical leaders collaborating at project roadmap planning wall for ${cleanTopic}, realistic lighting, documentary photography, 4k
+    const combinedSlides = [];
+    let deckTitle = `${cleanTopic}: Executive Masterclass`;
 
-### STRICT RULES:
-- Output ONLY valid JSON matching schema.
-- NO REPETITIVE PLACEHOLDERS: Do NOT output the topic name as bullet points or repeat generic filler. Every bullet point must contain authentic domain-specific insight.
-- EACH BULLET MUST HAVE 15-25 WORDS and START WITH A BOLD KEYWORD: e.g. "**Keyword**: Explanation..."
-- STRICT REALISTIC CONTEXTUAL PHOTOS (NO ABSTRACT ART): Every image prompt must depict realistic tangible subjects, documentary photography, 4k, realistic lighting.
-
-### STRICT JSON SCHEMA:
-{
-  "deck_title": "Clean Presentation Title",
-  "topic": "${cleanTopic}",
-  "slides": [
-    {
-      "slide_number": 1,
-      "layout_type": "title_hero",
-      "category": "EXECUTIVE BRIEFING",
-      "title": "Main Compelling Title",
-      "subtitle": "Clear, contextual 1-line subtitle explaining the scope",
-      "objective": "High-level goal of this presentation",
-      "bullets": [
-        "**Strategic Intent**: High-level vision outlining the roadmap and expected deliverables.",
-        "**Target Audience**: Designed for cross-functional stakeholders, engineers, and leadership."
-      ],
-      "image_search_query": "specific realistic query",
-      "visual_description": "documentary scene description of real-world subject",
-      "image_prompt": "Documentary photography of authentic subject in realistic operational setting, 4k, clean sharp focus, realistic lighting"
-    }
-  ]
-}`;
-
-        const singleDeck = await executeLlmPrompt(prompt);
-        if (singleDeck && Array.isArray(singleDeck.slides) && singleDeck.slides.length > 0) {
-            return normalizePresentationDeck(singleDeck, cleanTopic, totalCount);
+    chunkResults.forEach((deckResult) => {
+        if (deckResult && deckResult.deck_title) {
+            deckTitle = deckResult.deck_title;
         }
-    } else {
-        // Two-Batch Generation for totalCount > 10 (Avoids Token Truncation)
-        const batch1Count = 10;
-        const batch2Count = totalCount - batch1Count;
-
-        const prompt1 = `Generate Part 1 (Slides 1 to ${batch1Count}) of an executive ${totalCount}-slide presentation deck on: "${cleanTopic}".
-Slide 1 is title_hero (EXECUTIVE BRIEFING), Slide 2 is split_image_content (STRATEGIC OBJECTIVE), Slides 3 to ${batch1Count} are deep architectural pillars.
-Every slide must have category, title, subtitle, objective, 3-4 bullets (15-25 words each, bold keyword first), image_search_query, visual_description, and image_prompt (realistic documentary photography, 4k).
-Output ONLY valid JSON: { "deck_title": "Clean Title", "topic": "${cleanTopic}", "slides": [...] }`;
-
-        const prompt2 = `Generate Part 2 (Slides ${batch1Count + 1} to ${totalCount}) continuing the executive presentation deck on: "${cleanTopic}".
-Slides ${batch1Count + 1} to ${totalCount - 1} are Advanced Pillars (Governance, Benchmarks, Case Studies, Bottlenecks, Mitigation, Economics).
-Slide ${totalCount} is STRATEGIC ROADMAP (Phased Implementation & Actionable Conclusion).
-Every slide must have category, title, subtitle, objective, 3-4 bullets (15-25 words each, bold keyword first), image_search_query, visual_description, and image_prompt (realistic documentary photography, 4k).
-Output ONLY valid JSON: { "deck_title": "Clean Title", "topic": "${cleanTopic}", "slides": [...] }`;
-
-        const [deckPart1, deckPart2] = await Promise.all([
-            executeLlmPrompt(prompt1),
-            executeLlmPrompt(prompt2)
-        ]);
-
-        const combinedSlides = [];
-        if (deckPart1 && Array.isArray(deckPart1.slides)) {
-            combinedSlides.push(...deckPart1.slides);
+        if (deckResult && Array.isArray(deckResult.slides)) {
+            combinedSlides.push(...deckResult.slides);
         }
-        if (deckPart2 && Array.isArray(deckPart2.slides)) {
-            combinedSlides.push(...deckPart2.slides);
-        }
+    });
 
-        if (combinedSlides.length > 0) {
-            const mergedDeck = {
-                deck_title: (deckPart1 && deckPart1.deck_title) || `${cleanTopic}: Executive Masterclass`,
-                topic: cleanTopic,
-                theme: theme,
-                slides: combinedSlides
-            };
-            return normalizePresentationDeck(mergedDeck, cleanTopic, totalCount);
-        }
+    if (combinedSlides.length > 0) {
+        const mergedDeck = {
+            deck_title: deckTitle,
+            topic: cleanTopic,
+            theme: theme,
+            slides: combinedSlides
+        };
+        return normalizePresentationDeck(mergedDeck, cleanTopic, totalCount);
     }
 
     return generateRichFallbackDeck(cleanTopic, totalCount, theme);
@@ -2554,6 +2557,75 @@ Core Emotional & Conversational Guidelines:
             return sendJson(res, 500, {
                 success: false,
                 error: err.message || 'Failed to generate presentation deck.'
+            });
+        }
+    }
+
+    // ----------------------------------------------------
+    // API: NEURAL TEXT-TO-SPEECH (POST /api/tts)
+    // ----------------------------------------------------
+    if (req.method === 'POST' && pathname === '/api/tts') {
+        try {
+            ENV = loadEnv();
+            const body = await parseJsonBody(req);
+            const text = (body.text || '').trim();
+            const voice = (body.voice || 'nova').replace(/^neural_/, ''); // nova, shimmer, alloy, echo, fable, onyx
+            const model = body.model || 'tts-1';
+            const apiKey = (body.apiKey || '').trim() || (ENV.OPENAI_API_KEY || '').trim();
+
+            if (!text) {
+                return sendJson(res, 400, { success: false, error: 'Text parameter is required for TTS.' });
+            }
+
+            // Attempt OpenAI High-Fidelity Audio API if key is present
+            if (apiKey) {
+                try {
+                    const ttsRes = await fetch('https://api.openai.com/v1/audio/speech', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${apiKey}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            model: model,
+                            input: text.slice(0, 4096),
+                            voice: voice,
+                            speed: body.speed || 1.02
+                        })
+                    });
+
+                    if (ttsRes.ok) {
+                        const audioBuffer = await ttsRes.arrayBuffer();
+                        res.writeHead(200, {
+                            'Content-Type': 'audio/mpeg',
+                            'Content-Length': audioBuffer.byteLength,
+                            'Cache-Control': 'public, max-age=86400',
+                            'Access-Control-Allow-Origin': '*'
+                        });
+                        res.end(Buffer.from(audioBuffer));
+                        return;
+                    }
+
+                    const errData = await ttsRes.json().catch(() => ({}));
+                    console.warn('[TTS] OpenAI Speech notice:', errData.error ? errData.error.message : ttsRes.status);
+                } catch (cloudErr) {
+                    console.warn('[TTS] Cloud connection notice:', cloudErr.message);
+                }
+            }
+
+            // Signal seamless fallback to client Pipeline A (Browser Neural Engine)
+            return sendJson(res, 200, {
+                success: false,
+                fallback: true,
+                message: 'Fallback to Pipeline A: High-Definition Natural Browser Voice'
+            });
+
+        } catch (err) {
+            console.error('[API Error /api/tts]:', err.message);
+            return sendJson(res, 200, {
+                success: false,
+                fallback: true,
+                error: err.message
             });
         }
     }
