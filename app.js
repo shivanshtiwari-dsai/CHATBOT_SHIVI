@@ -3413,10 +3413,24 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
     const _IMAGE_ABSTRACT_TERMS = /\b(abstract|surreal|geometric shapes?|neon glow|digital wave|glowing swirls?|3D data visualization|hologram|futuristic background|technology background|digital transformation|innovation concept|business concept|modern technology|artificial intelligence concept|data concept|futuristic city|blockchain network)\b/gi;
     const _STYLE_SUFFIX = 'hyperrealistic professional 8k photography, sharp focus, studio lighting, award-winning composition, clean cinematic depth of field, ultra high-definition textures, color graded';
 
-    function buildContextualSlideImageUrl(slide, topic, index) {
+    // In-memory cache for loaded slide image URLs so navigating back does not re-fetch or consume quota
+    const slideImageMemoryCache = (typeof window !== 'undefined' && window._slideImageCache)
+        ? window._slideImageCache
+        : new Map();
+    if (typeof window !== 'undefined') {
+        window._slideImageCache = slideImageMemoryCache;
+    }
+
+    /**
+     * Multi-Tier Slide Visual Fallback Engine:
+     * Level 0: Pollinations with turbo model and staggered seed (width=800, height=500)
+     * Level 1: Contextual Unsplash source based on slide domain keywords
+     * Level 2: Ultra-safe high-aesthetic tech placeholder (photo-1518770660439-4636190af475)
+     */
+    function buildSlideVisualTiers(slide, topic, index) {
         const slideObj = slide || {};
         const rawTitle = slideObj.title || slideObj.slide_title || '';
-        const keySubject = String(rawTitle).replace(/[^a-zA-Z0-9 ]/g, '').trim();
+        const keySubject = String(rawTitle).replace(/[^a-zA-Z0-9 ]/g, ' ').trim();
 
         let specificContext = String(
             slideObj.image_prompt ||
@@ -3426,7 +3440,7 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
 
         if (!specificContext && Array.isArray(slideObj.bullets) && slideObj.bullets.length > 0) {
             for (const b of slideObj.bullets) {
-                let stripped = String(b).replace(/^\*\*.*?\*\*:\s*/, '').replace(/[^a-zA-Z0-9 ,.]/g, '').trim();
+                let stripped = String(b).replace(/^\*\*.*?\*\*:\s*/, '').replace(/[^a-zA-Z0-9 ,.]/g, ' ').trim();
                 if (stripped.length > 20) {
                     specificContext = stripped.slice(0, 120);
                     break;
@@ -3438,24 +3452,146 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
             specificContext = `${topic} ${keySubject}`.trim() || `${topic} slide ${index}`;
         }
 
-        // Ban generic abstract or surreal buzzwords so photos remain strictly contextual
         specificContext = specificContext.replace(_IMAGE_ABSTRACT_TERMS, '').replace(/\s{2,}/g, ' ').trim();
         if (!specificContext || specificContext.length < 10) {
-            specificContext = `${topic} operational environment, ${keySubject}`;
+            specificContext = `${topic} operational environment ${keySubject}`;
         }
 
-        const seed = Math.abs(hashCode(`${topic}_slide_${index}`));
+        const searchKeywords = encodeURIComponent(
+            `${rawTitle} ${topic || ''}`.replace(/[^a-zA-Z0-9 ]/g, ' ').trim().slice(0, 50)
+        );
 
-        if (typeof buildOptimizedImageUrl === 'function') {
-            return buildOptimizedImageUrl(specificContext, seed, 1280, 720, 'flux');
+        const safeIndex = parseInt(index, 10) || 1;
+        const seed = safeIndex * 137;
+        const prompt = encodeURIComponent(`${specificContext}, corporate tech, realistic, 8k`);
+
+        // Level 0: Fast Pollinations Turbo with staggered seed
+        const level0 = `https://image.pollinations.ai/prompt/${prompt}?width=800&height=500&nologo=true&model=turbo&seed=${seed}`;
+
+        // Level 1: High-res contextual Unsplash source based on slide keywords
+        const level1 = `https://source.unsplash.com/800x500/?${searchKeywords}`;
+
+        // Level 2: Ultra-safe tech placeholder
+        const level2 = `https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=800&q=80`;
+
+        return { level0, level1, level2, prompt: specificContext, searchKeywords, seed };
+    }
+
+    function buildContextualSlideImageUrl(slide, topic, index) {
+        const tiers = buildSlideVisualTiers(slide, topic, index);
+        const cacheKey = `${topic || 'deck'}_slide_${index}`;
+        if (slideImageMemoryCache.has(cacheKey)) {
+            return slideImageMemoryCache.get(cacheKey);
+        }
+        return tiers.level0;
+    }
+
+    /**
+     * Pre-fetches at most the next slide (currentSlideIndex + 1) in background
+     * without blocking UI, caching it in memory.
+     */
+    function prefetchNextSlideImage(topic, nextSlide, nextIndex) {
+        if (!nextSlide) return;
+        const cacheKey = `${topic || 'deck'}_slide_${nextIndex}`;
+        if (slideImageMemoryCache.has(cacheKey)) return;
+
+        const tiers = buildSlideVisualTiers(nextSlide, topic, nextIndex);
+        const preImg = new Image();
+        preImg.onload = function() {
+            slideImageMemoryCache.set(cacheKey, preImg.src);
+        };
+        preImg.onerror = function() {
+            const fbImg = new Image();
+            fbImg.onload = function() {
+                slideImageMemoryCache.set(cacheKey, fbImg.src);
+            };
+            fbImg.src = tiers.level2;
+        };
+        preImg.src = tiers.level0;
+    }
+
+    /**
+     * Renders slide visual container with lazy loading, memory caching,
+     * and multi-tier rate-limit resilient fallback engine.
+     */
+    function renderSlideImageComponentHtml(slide, topic, index, isActive = true) {
+        const slideObj = slide || {};
+        const cacheKey = `${topic || 'deck'}_slide_${index}`;
+        const title = slideObj.slide_title || slideObj.title || `Slide ${index}`;
+        const promptText = slideObj.image_prompt || slideObj.visual_prompt || `${title} ${topic}`;
+
+        // If slide is not active and not in memory cache, lazy load without eager img render
+        if (!isActive && !slideImageMemoryCache.has(cacheKey)) {
+            return `
+                <div class="slide-media-card" style="height: 100%; position: relative;">
+                    <div class="w-full h-full bg-slate-900/40 rounded-2xl animate-pulse slide-img-skeleton" style="min-height: 320px;">
+                        <div class="skeleton-shimmer"></div>
+                        <i data-lucide="image" class="skeleton-icon"></i>
+                        <span>Queued visual...</span>
+                    </div>
+                </div>
+            `;
         }
 
-        const enhancedPrompt = specificContext.includes('8k photography') ? specificContext : `${specificContext}, ${_STYLE_SUFFIX}`;
-        return `https://image.pollinations.ai/prompt/${encodeURIComponent(enhancedPrompt)}?width=1280&height=720&model=flux&nologo=true&enhance=true&quality=high&seed=${seed}`;
+        const tiers = buildSlideVisualTiers(slideObj, topic, index);
+        const cachedUrl = slideImageMemoryCache.get(cacheKey);
+        const initialSrc = cachedUrl || tiers.level0;
+        const isAlreadyCached = !!cachedUrl;
+
+        return `
+            <div class="slide-media-card" style="height: 100%; position: relative;">
+                ${!isAlreadyCached ? `
+                <div class="slide-img-skeleton" id="slideSkeleton_${index}">
+                    <div class="skeleton-shimmer"></div>
+                    <div class="w-7 h-7 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" style="width: 24px; height: 24px; border: 2px solid rgba(6,182,212,0.3); border-top-color: #06b6d4; border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+                    <span style="font-size: 0.75rem; color: #94a3b8; margin-top: 6px;">Loading slide visual...</span>
+                </div>
+                ` : ''}
+                <img src="${initialSrc}" 
+                     alt="${escapeHtml(title)}" 
+                     class="slide-ai-visual-img ${isAlreadyCached ? 'loaded' : ''}"
+                     data-tier="0"
+                     data-level0="${escapeHtml(tiers.level0)}"
+                     data-level1="${escapeHtml(tiers.level1)}"
+                     data-level2="${escapeHtml(tiers.level2)}"
+                     data-cachekey="${escapeHtml(cacheKey)}"
+                     onload="
+                        this.classList.add('loaded');
+                        var sk = document.getElementById('slideSkeleton_${index}');
+                        if (sk) sk.style.display = 'none';
+                        if (window._slideImageCache) window._slideImageCache.set('${escapeHtml(cacheKey)}', this.src);
+                     "
+                     onerror="
+                        var sk = document.getElementById('slideSkeleton_${index}');
+                        var tier = parseInt(this.getAttribute('data-tier') || '0', 10);
+                        if (tier === 0) {
+                            this.setAttribute('data-tier', '1');
+                            this.src = this.getAttribute('data-level1');
+                        } else if (tier === 1) {
+                            this.setAttribute('data-tier', '2');
+                            this.src = this.getAttribute('data-level2');
+                        } else {
+                            this.onerror = null;
+                            if (sk) sk.style.display = 'none';
+                            this.classList.add('loaded');
+                        }
+                     " />
+                ${promptText ? `
+                <div class="slide-image-badge-pill">
+                    <i data-lucide="sparkles"></i>
+                    <span class="image-prompt-text" title="${escapeHtml(promptText)}">✦ ${escapeHtml(promptText)}</span>
+                </div>
+                ` : ''}
+            </div>
+        `;
     }
 
     window.hashCode = hashCode;
+    window.slideImageMemoryCache = slideImageMemoryCache;
+    window.buildSlideVisualTiers = buildSlideVisualTiers;
     window.buildContextualSlideImageUrl = buildContextualSlideImageUrl;
+    window.prefetchNextSlideImage = prefetchNextSlideImage;
+    window.renderSlideImageComponentHtml = renderSlideImageComponentHtml;
     if (typeof buildFastFallbackImageUrl === 'function') {
         window.buildFastFallbackImageUrl = buildFastFallbackImageUrl;
     }
@@ -3691,9 +3827,12 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                         valign: 'top'
                     });
 
-                    // Right column: AI Generated Visual Image
+                    // Right column: AI Generated Visual Image (with cache support)
                     const imgPrompt = s.image_prompt || s.visual_prompt || `${deckTitle} ${slideTitle}`;
-                    const imgUrl = s.image_url || buildContextualSlideImageUrl(s, deckTitle, idx + 1);
+                    const cacheKey = `${deckTitle}_slide_${idx + 1}`;
+                    const cachedUrl = slideImageMemoryCache.get(cacheKey);
+                    const tiers = buildSlideVisualTiers(s, deckTitle, idx + 1);
+                    const imgUrl = cachedUrl || (idx === 0 ? tiers.level0 : tiers.level2);
 
                     slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
                         x: 6.85, y: contentTop, w: colW, h: contentHeight,
@@ -3768,9 +3907,12 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                         });
                     }
 
-                    // Right column: AI Generated Visual Image
+                    // Right column: AI Generated Visual Image (with cache support)
                     const imgPrompt = s.image_prompt || s.visual_prompt || `${deckTitle} ${slideTitle}`;
-                    const imgUrl = s.image_url || buildContextualSlideImageUrl(s, deckTitle, idx + 1);
+                    const cacheKey = `${deckTitle}_slide_${idx + 1}`;
+                    const cachedUrl = slideImageMemoryCache.get(cacheKey);
+                    const tiers = buildSlideVisualTiers(s, deckTitle, idx + 1);
+                    const imgUrl = cachedUrl || (idx === 0 ? tiers.level0 : tiers.level2);
 
                     slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
                         x: 6.85, y: contentTop, w: colW, h: contentHeight,
@@ -4554,23 +4696,7 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                                 </div>
                             </div>
                             <div class="title-hero-right">
-                                <div class="slide-media-card" style="height: 100%;">
-                                    <div class="slide-img-skeleton">
-                                        <div class="skeleton-shimmer"></div>
-                                        <i data-lucide="image" class="skeleton-icon"></i>
-                                        <span>Rendering AI Visual...</span>
-                                    </div>
-                                    <img src="${imgUrl}" 
-                                         alt="${escapeHtml(imgPrompt)}" 
-                                         class="slide-ai-visual-img"
-                                         loading="lazy"
-                                         onload="if(this.previousElementSibling) this.previousElementSibling.style.display='none'; this.classList.add('loaded');"
-                                         onerror="if(this.previousElementSibling) this.previousElementSibling.style.display='none'; this.classList.add('loaded'); if(this.src!=='${fallbackUrl}'){this.src='${fallbackUrl}';}else{this.onerror=null;this.src='https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=900&q=80';}" />
-                                    <div class="slide-image-badge-pill">
-                                        <i data-lucide="sparkles"></i>
-                                        <span class="image-prompt-text" title="${escapeHtml(imgPrompt)}">${escapeHtml(imgPrompt)}</span>
-                                    </div>
-                                </div>
+                                ${renderSlideImageComponentHtml(currentSlide, deckTitle, currentIdx + 1, true)}
                             </div>
                         </div>
                         <div class="slide-keynote-footer">Shivi AI Presentation Studio • ${formattedCounter}</div>
@@ -4635,23 +4761,7 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                                 </div>
                             </div>
                             <div class="split-media-column">
-                                <div class="slide-media-card">
-                                     <div class="slide-img-skeleton">
-                                         <div class="skeleton-shimmer"></div>
-                                         <i data-lucide="image" class="skeleton-icon"></i>
-                                         <span>Rendering AI Visual...</span>
-                                     </div>
-                                     <img src="${imgUrl}" 
-                                          alt="${escapeHtml(imgPrompt)}" 
-                                          class="slide-ai-visual-img"
-                                          loading="lazy"
-                                          onload="if(this.previousElementSibling) this.previousElementSibling.style.display='none'; this.classList.add('loaded');"
-                                          onerror="if(this.previousElementSibling) this.previousElementSibling.style.display='none'; this.classList.add('loaded'); if(this.src!=='${fallbackUrl}'){this.src='${fallbackUrl}';}else{this.onerror=null;this.src='https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=900&q=80';}" />
-                                    <div class="slide-image-badge-pill">
-                                        <i data-lucide="sparkles"></i>
-                                        <span class="image-prompt-text" title="${escapeHtml(imgPrompt)}">${escapeHtml(imgPrompt)}</span>
-                                    </div>
-                                </div>
+                                ${renderSlideImageComponentHtml(currentSlide, deckTitle, currentIdx + 1, true)}
                             </div>
                         </div>
                         <div class="slide-keynote-footer">Shivi AI Presentation Studio • ${formattedCounter}</div>
@@ -4765,6 +4875,11 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                     img.classList.add('loaded');
                 }
             });
+
+            // Pre-fetch at most the next slide (currentSlideIndex + 1) in background
+            if (currentIdx + 1 < total) {
+                prefetchNextSlideImage(deckTitle, slides[currentIdx + 1], currentIdx + 2);
+            }
 
             if (window.lucide) lucide.createIcons();
         }

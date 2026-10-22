@@ -1209,8 +1209,8 @@ def build_contextual_slide_image_url(slide: dict, topic: str, index: int) -> str
     if not specific_context:
         specific_context = f"{topic} {key_subject}".strip() or f"{topic} slide {index}"
 
-    seed = abs(hash_code(f"{topic}_slide_{index}"))
-    return build_optimized_image_url(specific_context, seed=seed, width=1280, height=720, model="flux")
+    seed = (int(index) if index else 1) * 137
+    return build_optimized_image_url(specific_context, seed=seed, width=800, height=500, model="turbo")
 
 def repair_truncated_json(json_str: str) -> Optional[dict]:
     """Multi-pass JSON repair: strip markdown fences, extract first JSON object,

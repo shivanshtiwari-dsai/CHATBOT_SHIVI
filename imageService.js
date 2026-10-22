@@ -77,8 +77,38 @@ function buildOptimizedImageUrl(rawPrompt, seed = 42, width = 1280, height = 720
 /**
  * Ultra-fast CDN fallback using Pollinations Turbo (1.2s delivery)
  */
-function buildFastFallbackImageUrl(rawPrompt, seed = 42, width = 1280, height = 720) {
-  return buildOptimizedImageUrl(rawPrompt, seed, width, height, 'turbo');
+/**
+ * Multi-Tier Slide Visual Fallback Engine
+ * Generates Level 0 (Turbo + Staggered Seed), Level 1 (Contextual Unsplash), and Level 2 (Ultra-Safe Tech Fallback)
+ *
+ * @param {object} slide - Slide object
+ * @param {string} topic - Deck topic
+ * @param {number} index - Slide index (1-based or 0-based)
+ * @returns {object} { level0, level1, level2, prompt, searchKeywords }
+ */
+function buildSlideVisualTiers(slide, topic, index = 1) {
+  const slideObj = slide || {};
+  const title = slideObj.slide_title || slideObj.title || '';
+  const searchKeywords = encodeURIComponent(
+    `${title} ${topic || ''}`.replace(/[^a-zA-Z0-9 ]/g, ' ').trim().slice(0, 50)
+  );
+
+  const rawPrompt = slideObj.image_prompt || slideObj.visual_prompt || title || topic || 'technology';
+  const cleanPrompt = String(rawPrompt).replace(BANNED_ABSTRACT_TERMS, '').replace(/\s{2,}/g, ' ').trim();
+  const prompt = encodeURIComponent(`${cleanPrompt}, corporate tech, realistic, 8k`);
+  const safeIndex = parseInt(index, 10) || 1;
+  const seed = safeIndex * 137;
+
+  // Level 0: Pollinations with turbo model and staggered seed (lightweight 800x500)
+  const level0 = `https://image.pollinations.ai/prompt/${prompt}?width=800&height=500&nologo=true&model=turbo&seed=${seed}`;
+
+  // Level 1: Contextual Unsplash source based on slide domain keywords
+  const level1 = `https://source.unsplash.com/800x500/?${searchKeywords}`;
+
+  // Level 2: Ultra-safe high-aesthetic tech placeholder
+  const level2 = `https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=800&q=80`;
+
+  return { level0, level1, level2, prompt: cleanPrompt, searchKeywords };
 }
 
 // Universal module export (Node.js CommonJS & Browser Window)
@@ -87,6 +117,7 @@ if (typeof module !== 'undefined' && module.exports) {
     enhanceImagePrompt,
     buildOptimizedImageUrl,
     buildFastFallbackImageUrl,
+    buildSlideVisualTiers,
     BANNED_ABSTRACT_TERMS
   };
 }
@@ -95,4 +126,6 @@ if (typeof window !== 'undefined') {
   window.enhanceImagePrompt = enhanceImagePrompt;
   window.buildOptimizedImageUrl = buildOptimizedImageUrl;
   window.buildFastFallbackImageUrl = buildFastFallbackImageUrl;
+  window.buildSlideVisualTiers = buildSlideVisualTiers;
 }
+

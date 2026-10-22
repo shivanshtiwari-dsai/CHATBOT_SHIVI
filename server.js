@@ -596,10 +596,12 @@ function buildContextualSlideImageUrl(slide, topic, index) {
         specificContext = `${topic} operational environment, ${keySubject}`;
     }
 
-    // Generate deterministic seed based on topic and slide index so images stay consistent
-    const seed = Math.abs(hashCode(`${topic}_slide_${index}`));
+    // Generate staggered seed based on slide index and use lightweight turbo model
+    const safeIndex = parseInt(index, 10) || 1;
+    const seed = safeIndex * 137;
+    const prompt = encodeURIComponent(`${specificContext}, corporate tech, realistic, 8k`);
 
-    return buildOptimizedImageUrl(specificContext, seed, 1280, 720, 'flux');
+    return `https://image.pollinations.ai/prompt/${prompt}?width=800&height=500&nologo=true&model=turbo&seed=${seed}`;
 }
 
 function repairTruncatedJson(jsonStr) {
@@ -832,9 +834,10 @@ function normalizePresentationDeck(rawDeck, topic = 'Executive Keynote', fallbac
 
         // 6. Contextual Photo Prompt & URLs via buildContextualSlideImageUrl
         const imgUrl = buildContextualSlideImageUrl(s, cleanTopic, slideNum);
-        const seed = Math.abs(hashCode(`${cleanTopic}_slide_${slideNum}`));
+        const safeIndex = parseInt(slideNum, 10) || 1;
+        const seed = safeIndex * 137;
         const rawIp = String(s.image_prompt || s.visual_description || s.image_search_query || `${cleanTopic} ${slideTitle}`).replace(_IMAGE_ABSTRACT_TERMS, '').replace(/\s{2,}/g, ' ').trim();
-        const fallbackUrl = buildFastFallbackImageUrl(rawIp, seed, 1280, 720);
+        const fallbackUrl = 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=800&q=80';
         const enhancedPrompt = enhanceImagePrompt(rawIp);
 
         let speakerNotes = String(s.speaker_notes || '').trim();
@@ -1537,8 +1540,9 @@ async function createPptxFile(deck) {
 
             // Right column: AI Generated Visual Image
             const imgPrompt = s.image_prompt || s.visual_prompt || `${normalizedDeck.deck_title} modern corporate executive technology`;
-            const seed = Math.abs(hashCode(`${normalizedDeck.deck_title}_slide_${idx + 1}`));
-            const imgUrl = s.image_url || buildOptimizedImageUrl(imgPrompt, seed, 1280, 720, 'flux');
+            const safeIndex = parseInt(idx, 10) + 1;
+            const seed = safeIndex * 137;
+            const imgUrl = (idx === 0 && s.image_url) ? s.image_url : (s.fallback_image_url || 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=800&q=80');
 
             slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
                 x: 6.85, y: contentTop, w: colW, h: contentHeight,
@@ -1615,8 +1619,9 @@ async function createPptxFile(deck) {
 
             // Right column: AI Generated Visual Image
             const imgPrompt = s.image_prompt || s.visual_prompt || `${normalizedDeck.deck_title} ${slideTitle}`;
-            const seed = Math.abs(hashCode(`${normalizedDeck.deck_title}_slide_${idx + 1}`));
-            const imgUrl = s.image_url || buildOptimizedImageUrl(imgPrompt, seed, 1280, 720, 'flux');
+            const safeIndex = parseInt(idx, 10) + 1;
+            const seed = safeIndex * 137;
+            const imgUrl = (idx === 0 && s.image_url) ? s.image_url : (s.fallback_image_url || 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=800&q=80');
 
             slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
                 x: 6.85, y: contentTop, w: colW, h: contentHeight,
