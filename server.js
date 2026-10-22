@@ -17,6 +17,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const Brain = require('./brain.js');
 const PptxGenJS = require('pptxgenjs');
+const { enhanceImagePrompt, buildOptimizedImageUrl, buildFastFallbackImageUrl } = require('./imageService.js');
 
 const ROOT_DIR = __dirname;
 const ENV_PATH = path.join(ROOT_DIR, '.env');
@@ -471,7 +472,7 @@ async function callImageGenerator(provider, apiKey, prompt, options = {}) {
     if (!p) throw new Error('Prompt cannot be empty for image generation.');
 
     const style = options.style || 'vivid';
-    const size = options.size || '1024x1024';
+    const size = options.size || '1280x720';
     const model = options.model || '';
 
     // Style prompt enhancer
@@ -526,18 +527,21 @@ async function callImageGenerator(provider, apiKey, prompt, options = {}) {
         };
     }
 
-    // 2. Pollinations.ai Flux AI (100% Free & Fast)
-    const [w, h] = size.includes('x') ? size.split('x').map(Number) : [1024, 1024];
-    const width = w || 1024;
-    const height = h || 1024;
-    const seed = Math.floor(Math.random() * 10000000);
-    const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(enhancedPrompt)}?width=${width}&height=${height}&nologo=true&enhance=true&seed=${seed}&model=flux`;
+    // 2. Pollinations.ai Flux AI (High-Resolution 1280x720 16:9 Endpoint with Flux Model for Peak Clarity)
+    const [w, h] = size.includes('x') ? size.split('x').map(Number) : [1280, 720];
+    const width = w || 1280;
+    const height = h || 720;
+    const seed = options.seed || Math.floor(Math.random() * 10000000);
+    const targetModel = options.model || 'flux';
+    const pollinationsUrl = buildOptimizedImageUrl(enhancedPrompt, seed, width, height, targetModel);
+    const fallbackUrl = buildFastFallbackImageUrl(enhancedPrompt, seed, width, height);
 
     return {
         imageUrl: pollinationsUrl,
-        revisedPrompt: enhancedPrompt,
+        fallbackUrl: fallbackUrl,
+        revisedPrompt: enhanceImagePrompt(enhancedPrompt),
         provider: 'pollinations',
-        model: 'flux'
+        model: targetModel
     };
 }
 
@@ -555,67 +559,120 @@ function hashCode(str) {
     return hash;
 }
 
+// Banned generic/abstract terms that produce non-contextual images
+const _IMAGE_ABSTRACT_TERMS = /\b(abstract|surreal|geometric shapes?|neon glow|digital wave|glowing swirls?|3D data visualization|hologram|futuristic background|technology background|digital transformation|innovation concept|business concept|modern technology|artificial intelligence concept|data concept|futuristic city|blockchain network)\b/gi;
+const _STYLE_SUFFIX = 'high resolution documentary photography, editorial photo, realistic lighting, 4k, hyper-detailed, clean sharp focus, authentic real-world context';
+
 function buildContextualSlideImageUrl(slide, topic, index) {
     const slideObj = slide || {};
     const rawTitle = slideObj.title || slideObj.slide_title || '';
     const keySubject = String(rawTitle).replace(/[^a-zA-Z0-9 ]/g, '').trim();
 
-    let specificContext = String(slideObj.image_prompt || slideObj.visual_description || slideObj.image_search_query || '').trim();
-    if (!specificContext) {
-        let keyBullet = '';
-        if (Array.isArray(slideObj.bullets) && slideObj.bullets.length > 0) {
-            const firstB = String(slideObj.bullets[0]).replace(/^\*\*.*?\*\*:\s*/, '').replace(/[^a-zA-Z0-9 ]/g, '').trim();
-            keyBullet = firstB.slice(0, 60);
+    // Priority: image_prompt > visual_description > image_search_query > bullets
+    let specificContext = String(
+        slideObj.image_prompt ||
+        slideObj.visual_description ||
+        slideObj.image_search_query || ''
+    ).trim();
+
+    // If still empty, derive from first bullet's descriptive portion
+    if (!specificContext && Array.isArray(slideObj.bullets) && slideObj.bullets.length > 0) {
+        for (const b of slideObj.bullets) {
+            let stripped = String(b).replace(/^\*\*.*?\*\*:\s*/, '').replace(/[^a-zA-Z0-9 ,.]/g, '').trim();
+            if (stripped.length > 20) {
+                specificContext = stripped.slice(0, 120);
+                break;
+            }
         }
-        specificContext = `${topic} ${keySubject} ${keyBullet}`.trim() || `${topic} ${keySubject}`;
+    }
+
+    if (!specificContext) {
+        specificContext = `${topic} ${keySubject}`.trim() || `${topic} slide ${index}`;
     }
 
     // Ban generic abstract or surreal buzzwords so photos remain strictly contextual
-    specificContext = specificContext.replace(/\b(abstract|surreal|geometric shapes|neon glow|digital wave|glowing swirls|3D data visualization|hologram|futuristic background)\b/gi, '').trim();
-    if (!specificContext) specificContext = `${topic} ${keySubject}`;
-
-    // Enforce realistic, documentary, or technical photography style matching the domain
-    const styleSuffix = 'high resolution documentary photography, editorial photo, realistic lighting, 4k, hyper-detailed, clean sharp focus, authentic context';
-    const enhancedPrompt = specificContext.includes('documentary photography') ? specificContext : `${specificContext}, ${styleSuffix}`;
+    specificContext = specificContext.replace(_IMAGE_ABSTRACT_TERMS, '').replace(/\s{2,}/g, ' ').trim();
+    if (!specificContext || specificContext.length < 10) {
+        specificContext = `${topic} operational environment, ${keySubject}`;
+    }
 
     // Generate deterministic seed based on topic and slide index so images stay consistent
     const seed = Math.abs(hashCode(`${topic}_slide_${index}`));
 
-    return `https://image.pollinations.ai/prompt/${encodeURIComponent(enhancedPrompt)}?width=900&height=550&nologo=true&seed=${seed}`;
+    return buildOptimizedImageUrl(specificContext, seed, 1280, 720, 'flux');
 }
 
 function repairTruncatedJson(jsonStr) {
     if (!jsonStr || typeof jsonStr !== 'string') return null;
+
+    // Pass 1: Strip markdown code fences
     let text = jsonStr.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+
+    // Pass 2: Slice from first '{' to discard any conversational preamble
     const firstBrace = text.indexOf('{');
-    if (firstBrace !== -1) {
-        text = text.substring(firstBrace).trim();
-    }
+    if (firstBrace === -1) return null;
+    text = text.substring(firstBrace).trim();
+
+    // Pass 3: Clean JSON.parse attempt
     try {
         return JSON.parse(text);
     } catch (e) {
-        // Continue to salvage partial JSON
+        // Fall through to bracket balancing
     }
 
+    // Pass 4: Balance unmatched braces and brackets
+    function balanceBrackets(s) {
+        const openBraces = (s.match(/\{/g) || []).length - (s.match(/\}/g) || []).length;
+        const openBrackets = (s.match(/\[/g) || []).length - (s.match(/\]/g) || []).length;
+        let balanced = s.replace(/,\s*$/, '').trim();
+        if (openBrackets > 0) balanced += ']'.repeat(openBrackets);
+        if (openBraces > 0) balanced += '}'.repeat(openBraces);
+        return balanced;
+    }
+
+    try {
+        const balanced = balanceBrackets(text);
+        const res = JSON.parse(balanced);
+        if (res && Array.isArray(res.slides) && res.slides.length > 0) {
+            return res;
+        }
+    } catch (e) {
+        // Fall through to partial slide recovery
+    }
+
+    // Pass 5: Partial slide recovery — walk depth to salvage complete slides
     const slidesIndex = text.indexOf('"slides"');
     if (slidesIndex === -1) return null;
 
-    const lastObjectClose = text.lastIndexOf('}');
-    if (lastObjectClose > slidesIndex) {
-        let candidate = text.substring(0, lastObjectClose + 1).trim();
-        if (candidate.endsWith(',')) candidate = candidate.slice(0, -1).trim();
-        if (!candidate.endsWith(']')) {
-            candidate += '\n  ]';
+    const arrOpen = text.indexOf('[', slidesIndex);
+    if (arrOpen === -1) return null;
+
+    let depth = 0;
+    let lastCompleteEnd = -1;
+    for (let i = arrOpen + 1; i < text.length; i++) {
+        const ch = text[i];
+        if (ch === '{') depth++;
+        else if (ch === '}') {
+            depth--;
+            if (depth === 0) lastCompleteEnd = i;
         }
-        if (!candidate.endsWith('}')) {
-            candidate += '\n}';
-        }
+    }
+
+    if (lastCompleteEnd > arrOpen) {
+        const outerPrefix = text.substring(0, slidesIndex);
+        const slidesBody = text.substring(arrOpen + 1, lastCompleteEnd + 1).replace(/,\s*$/, '');
+        const candidate = outerPrefix + '"slides": [' + slidesBody + ']}';
         try {
-            return JSON.parse(candidate);
+            const res = JSON.parse(candidate);
+            if (res && Array.isArray(res.slides) && res.slides.length > 0) {
+                console.log(`[JSON Partial Recovery]: Recovered ${res.slides.length} slides from truncated response.`);
+                return res;
+            }
         } catch (e) {
             console.warn('[Truncated JSON Recovery Failed]:', e.message);
         }
     }
+
     return null;
 }
 
@@ -665,49 +722,87 @@ function normalizePresentationDeck(rawDeck, topic = 'Executive Keynote', fallbac
         }
 
         // 5. Bullets
-        const bullets = [];
+        let rawBulletsList = [];
         if (Array.isArray(s.bullets) && s.bullets.length > 0) {
             s.bullets.forEach(b => {
                 const bStr = String(b).trim();
-                if (bStr) bullets.push(bStr);
+                if (bStr) rawBulletsList.push(bStr);
             });
         } else if (Array.isArray(s.cards_or_points) && s.cards_or_points.length > 0) {
             s.cards_or_points.forEach(c => {
                 if (c && typeof c === 'object') {
                     const t = String(c.title || c.label || 'Core Vector').trim();
                     const d = String(c.description || c.detail || '').trim();
-                    bullets.push(`**${t}**: ${d}`);
+                    rawBulletsList.push(`**${t}**: ${d}`);
                 } else if (typeof c === 'string' && c.trim()) {
-                    bullets.push(c.trim());
+                    rawBulletsList.push(c.trim());
                 }
             });
         }
 
-        if (bullets.length < 2) {
+        // Strict bullet sanitization: filter out placeholders, shallow points, and title/topic repeats
+        const titleLower = slideTitle.toLowerCase().trim();
+        const topicLower = cleanTopic.toLowerCase().trim();
+        const deckLower = deckTitle.toLowerCase().trim();
+        const placeholderRegex = /^(placeholder|lorem ipsum|bullet point|sample point|click to edit|point \d+|item \d+)\b/i;
+
+        const cleanedBullets = [];
+        for (const b of rawBulletsList) {
+            let bClean = String(b).replace(/^[•\-\*]\s*/, '').trim();
+            if (!bClean || bClean.length < 15) continue;
+            if (placeholderRegex.test(bClean)) continue;
+
+            const coreText = bClean.replace(/^\*\*.*?\*\*:\s*/, '').trim().toLowerCase();
+            if (coreText === titleLower || coreText === topicLower || coreText === deckLower) continue;
+            if ([titleLower, topicLower, deckLower].includes(bClean.toLowerCase().replace(/[\*: ]/g, ''))) continue;
+
+            // Ensure "**Keyword**: Content" format
+            const match = bClean.match(/^\*\*(.*?)\*\*:\s*(.*)$/);
+            if (!match) {
+                if (bClean.includes(':')) {
+                    const parts = bClean.split(':');
+                    const kw = parts[0].replace(/\*/g, '').trim();
+                    const desc = parts.slice(1).join(':').trim();
+                    bClean = `**${kw}**: ${desc}`;
+                } else {
+                    const words = bClean.split(/\s+/);
+                    const kw = words.slice(0, 2).join(' ').replace(/\*/g, '').trim();
+                    const desc = words.slice(2).join(' ').trim();
+                    bClean = desc ? `**${kw}**: ${desc}` : `**Core Vector**: ${bClean}`;
+                }
+            }
+
+            cleanedBullets.push(bClean);
+        }
+
+        let bullets = cleanedBullets;
+
+        if (bullets.length < 3) {
+            const t = cleanTopic;
             if (idx === 0) {
-                bullets.push(
-                    `**Strategic Intent**: High-level vision outlining the transformative roadmap, architectural requirements, and deliverables for ${cleanTopic}.`,
-                    '**Target Audience**: Designed for cross-functional stakeholders, engineering directors, and leadership demanding technical depth.',
-                    '**Presentation Standard**: Created with ShiviAI • Executive Keynote Widescreen Edition'
-                );
+                bullets = [
+                    `**Strategic Intent**: Defines the transformative vision, architectural blueprint, and measurable deliverables required to operationalize ${t} at enterprise scale.`,
+                    `**Target Audience**: Structured for C-suite executives, engineering directors, and cross-functional leads driving ${t} adoption across organizational units.`,
+                    `**Execution Scope**: Covers the end-to-end operational lifecycle from foundational architecture to resilient production deployment.`
+                ];
             } else if (idx === 1) {
-                bullets.push(
-                    '**Operational Efficiency**: Eliminating redundant manual workflows to reduce cycle times by up to 35% through automated orchestration.',
-                    '**System Reliability**: Implementing end-to-end telemetry and verification checks to safeguard uptime under peak traffic conditions.',
-                    '**Scalable Architecture**: Decoupling services to ensure modularity and predictable throughput as data density expands.'
-                );
+                bullets = [
+                    `**Operational Efficiency**: Automating redundant manual workflows within ${t} pipelines reduces cycle time by up to 35% and eliminates human error at scale.`,
+                    `**System Reliability**: Implementing real-time telemetry and circuit-breaker verification checks ensures ${t} infrastructure maintains 99.9% SLA compliance under peak load.`,
+                    `**Scalable Architecture**: Decoupling ${t} service components introduces modularity, enabling predictable horizontal throughput as data density and user concurrency expand.`
+                ];
             } else if (idx === rawSlides.length - 1) {
-                bullets.push(
-                    '**Phase 1 Kickoff**: Establish foundational telemetry baselines and spin up a dedicated cross-functional pilot team within 14 days.',
-                    '**Continuous Verification**: Implement automated benchmark validation gates to guarantee production SLA compliance.',
-                    '**Measurable ROI**: Accelerate capital efficiency through iterative feedback loops and compounding organizational leverage.'
-                );
+                bullets = [
+                    `**Phase 1 Foundation (Days 1–14)**: Establish ${t} telemetry baselines, onboard a cross-functional pilot team, and validate core infrastructure dependencies.`,
+                    `**Continuous Verification**: Expand deployment with automated benchmark validation gates ensuring rigorous production SLA compliance.`,
+                    `**Measurable ROI Targets**: Quantify capital efficiency gains through iterative ${t} feedback loops, targeting a minimum 3× return on investment within 90 days.`
+                ];
             } else {
-                bullets.push(
-                    '**Architectural Decoupling**: Partitioning execution pathways eliminates single points of failure while sustaining deterministic throughput.',
-                    '**Empirical Benchmarks**: Verified telemetry demonstrates a 3.4x compression in latency overhead across production workloads.',
-                    '**Adaptive Scaling**: Autonomous monitoring agents dynamically rebalance computational resources in response to traffic fluctuations.'
-                );
+                bullets = [
+                    `**Architectural Decoupling**: Partitioning ${t} execution pathways eliminates single points of failure while sustaining deterministic, auditable throughput under concurrent load.`,
+                    `**Empirical Benchmarks**: Verified ${t} telemetry across production workloads demonstrates a 3.4× compression in end-to-end latency overhead compared to monolithic baselines.`,
+                    `**Adaptive Scaling**: Autonomous ${t} monitoring agents dynamically rebalance computational resources in real time as traffic patterns and data ingestion rates fluctuate.`
+                ];
             }
         }
 
@@ -738,14 +833,13 @@ function normalizePresentationDeck(rawDeck, topic = 'Executive Keynote', fallbac
         // 6. Contextual Photo Prompt & URLs via buildContextualSlideImageUrl
         const imgUrl = buildContextualSlideImageUrl(s, cleanTopic, slideNum);
         const seed = Math.abs(hashCode(`${cleanTopic}_slide_${slideNum}`));
-        const fallbackUrl = `https://picsum.photos/seed/${seed}/900/550`;
-        const keySubject = String(s.title || s.slide_title || '').replace(/[^a-zA-Z0-9 ]/g, '').trim();
-        const specificContext = String(s.image_prompt || s.visual_description || s.image_search_query || `${cleanTopic} ${keySubject}`).replace(/\b(abstract|surreal|geometric shapes|neon glow|digital wave|glowing swirls|3D data visualization|hologram)\b/gi, '').trim() || `${cleanTopic} ${keySubject}`;
-        const enhancedPrompt = `${specificContext}, high resolution documentary photography, editorial photo, realistic lighting, 4k, hyper-detailed, clean sharp focus, authentic context`;
+        const rawIp = String(s.image_prompt || s.visual_description || s.image_search_query || `${cleanTopic} ${slideTitle}`).replace(_IMAGE_ABSTRACT_TERMS, '').replace(/\s{2,}/g, ' ').trim();
+        const fallbackUrl = buildFastFallbackImageUrl(rawIp, seed, 1280, 720);
+        const enhancedPrompt = enhanceImagePrompt(rawIp);
 
         let speakerNotes = String(s.speaker_notes || '').trim();
         if (!speakerNotes || speakerNotes.length < 30) {
-            const primaryLead = bullets[0] ? bullets[0].split(':')[0].replace(/\*/g, '') : 'this pillar';
+            const primaryLead = bullets[0] ? bullets[0].replace(/^\*\*.*?\*\*:\s*/, '').slice(0, 30) : 'this pillar';
             speakerNotes = `In this slide, we examine ${slideTitle}. Notice how ${primaryLead} establishes the baseline imperative for this domain. Our objective is clear: ${objective}`;
         }
 
@@ -770,7 +864,6 @@ function normalizePresentationDeck(rawDeck, topic = 'Executive Keynote', fallbac
                 value: 'Tier-1',
                 caption: `Standard for ${cleanTopic}`
             },
-            speaker_notes: speakerNotes
         });
     });
 
@@ -1183,73 +1276,70 @@ function buildChunkPrompt(chunk, totalCount, cleanTopic) {
     let roleDescription = '';
     if (isFirstChunk && isFinalChunk) {
         roleDescription = `
-- Slide 1: layout_type "title_hero", category "EXECUTIVE BRIEFING" (Authoritative Presentation Masterclass Title, 1-line scope subtitle, strategic intent).
-- Slide 2: layout_type "split_image_content", category "STRATEGIC OBJECTIVE" (Core Objectives, System Bottlenecks, Key Catalysts).
-- Slides 3 to ${totalCount - 1}: layout_type "split_image_content" (Deep-dive technical pillars: Architecture, Mechanisms, Data Topology, Performance).
-- Slide ${totalCount}: layout_type "split_image_content", category "STRATEGIC ROADMAP" (Phased Implementation Roadmap & Leadership Mandate).`;
+- Slide 1: layout "title_hero", category "EXECUTIVE SUMMARY" (Authoritative Presentation Masterclass Title, 1-line scope subtitle, strategic intent).
+- Slide 2: layout "split_image_content", category "STRATEGIC OBJECTIVE" (Core Objectives, System Bottlenecks, Key Catalysts).
+- Slides 3 to ${totalCount - 1}: layout "split_image_content" (Deep-dive technical pillars: Architecture, Mechanisms, Data Topology, Performance).
+- Slide ${totalCount}: layout "split_image_content", category "STRATEGIC ROADMAP" (Phased Implementation Roadmap & Leadership Mandate).`;
     } else if (isFirstChunk) {
         roleDescription = `
-- Slide 1: layout_type "title_hero", category "EXECUTIVE BRIEFING" (Authoritative Presentation Masterclass Title, 1-line scope subtitle, strategic intent).
-- Slide 2: layout_type "split_image_content", category "STRATEGIC OBJECTIVE" (Core Objectives, System Bottlenecks, Key Catalysts).
-- Slides 3 to ${chunk.end}: layout_type "split_image_content" (Deep-dive technical pillars: Architectural Foundation, Hardware/Compute Topology, Core Mechanics).`;
+- Slide 1: layout "title_hero", category "EXECUTIVE SUMMARY" (Authoritative Presentation Masterclass Title, 1-line scope subtitle, strategic intent).
+- Slide 2: layout "split_image_content", category "STRATEGIC OBJECTIVE" (Core Objectives, System Bottlenecks, Key Catalysts).
+- Slides 3 to ${chunk.end}: layout "split_image_content" (Deep-dive technical pillars: Architectural Foundation, Hardware/Compute Topology, Core Mechanics).`;
     } else if (isFinalChunk) {
         roleDescription = `
-- Slides ${chunk.start} to ${totalCount - 1}: layout_type "split_image_content" (Advanced Deep Pillars: Security & Governance, Ecosystem Integrations, Unit Economics & ROI, Empirical Case Studies).
-- Slide ${totalCount}: layout_type "split_image_content", category "STRATEGIC ROADMAP" (Phased Implementation Roadmap, Actionable Milestones & Leadership Mandate).`;
+- Slides ${chunk.start} to ${totalCount - 1}: layout "split_image_content" (Advanced Deep Pillars: Security & Governance, Ecosystem Integrations, Unit Economics & ROI, Empirical Case Studies).
+- Slide ${totalCount}: layout "split_image_content", category "STRATEGIC ROADMAP" (Phased Implementation Roadmap, Actionable Milestones & Leadership Mandate).`;
     } else {
         roleDescription = `
-- Slides ${chunk.start} to ${chunk.end}: layout_type "split_image_content" (Advanced Pillars: Scalability Patterns, Telemetry, Latency Optimization, Edge Computing, Fault-Tolerance & Resilience).`;
+- Slides ${chunk.start} to ${chunk.end}: layout "split_image_content" (Advanced Pillars: Scalability Patterns, Telemetry, Latency Optimization, Edge Computing, Fault-Tolerance & Resilience).`;
     }
 
-    return `You are a Principal Presentation Architect and Executive Speechwriter.
-Generate an executive presentation deck on: "${cleanTopic}".
-Generate exactly ${countInChunk} cohesive, highly-structured slides (Slides ${chunk.start} through ${chunk.end} of ${totalCount}).
+    const layoutStr = isFirstChunk ? 'title_hero' : 'split_image_content';
+    const catStr = isFirstChunk ? 'EXECUTIVE SUMMARY' : 'CORE PILLAR';
 
-### SLIDE ROLES FOR THIS BATCH:
-${roleDescription}
+    return `You are an elite executive presentation designer and subject matter expert.
+Generate a high-yield, structured presentation for the given topic.
+You MUST output ONLY a valid JSON object matching the schema below. No markdown backticks (\`\`\`json), no chat conversational fluff.
 
-### MANDATORY REQUIREMENTS FOR EVERY SLIDE:
-1. 'slide_number': Exact integer number from ${chunk.start} to ${chunk.end}.
-2. 'layout_type': "title_hero" for Slide 1 only, otherwise "split_image_content".
-3. 'category': Distinct domain kicker in UPPERCASE (e.g. "EXECUTIVE BRIEFING", "STRATEGIC OBJECTIVE", "SYSTEM ARCHITECTURE", "DATA TOPOLOGY", "PERFORMANCE BENCHMARKS", "RISK GOVERNANCE", "STRATEGIC ROADMAP").
-4. 'title': Distinct, insightful heading. Do NOT repeat the bare topic name.
-5. 'subtitle': Contextual 1-line subtitle explaining the scope.
-6. 'objective': 1 clear sentence defining the strategic outcome of this slide.
-7. 'bullets': Exactly 3 to 4 detailed bullet points (15-25 words each, starting with bold keyword first e.g. "**Operational Velocity**: Eliminating manual pipeline handoffs to accelerate deployment velocity by up to 40%.").
-8. 'image_search_query': Specific, authentic real-world search query pinpointing the physical/factual subject of this slide (e.g. "mission control operations room telemetry wall engineers", NOT "technology").
-9. 'visual_description': In-depth documentary scene description of the real-world operational/technical setting grounded strictly in this slide's facts. Strictly NO abstract art, neon shapes, or fantasy graphics.
-10. 'image_prompt': High resolution documentary photography depicting the exact real-world subject in an authentic operational setting, realistic lighting, 4k, hyper-detailed, clean sharp focus.
+CRITICAL RULES:
+1. NEVER repeat the slide title, deck title, or topic name inside the 'bullets' array.
+2. Every content slide MUST contain 3 to 4 analytical, informative bullet points.
+3. Each bullet point MUST be 15 to 25 words long, starting with a bold keyword concept: "**Concept**: Explanation with real metrics, implementation steps, or technical facts."
+4. IMAGE PROMPT SPECIFICITY: For every slide, provide an 'image_prompt' that describes a concrete, photographic real-world scene directly tied to that slide's specific sub-topic (avoid abstract shapes, metaphors, or generic keywords).
 
-### STRICT JSON SCHEMA (OUTPUT ONLY VALID JSON, NO CODEBLOCKS):
+JSON SCHEMA:
 {
   "deck_title": "${cleanTopic}: Executive Masterclass",
   "topic": "${cleanTopic}",
   "slides": [
     {
       "slide_number": ${chunk.start},
-      "layout_type": "${isFirstChunk ? 'title_hero' : 'split_image_content'}",
-      "category": "${isFirstChunk ? 'EXECUTIVE BRIEFING' : 'CORE PILLAR'}",
-      "title": "Distinct Slide Headline",
-      "subtitle": "Clear 1-line contextual subtitle",
-      "objective": "Strategic outcome or focus of this slide",
+      "layout": "${layoutStr}",
+      "category": "${catStr}",
+      "title": "String - Clear, professional slide title",
+      "subtitle": "String - One-line contextual summary",
+      "objective": "String - Core objective of this slide",
       "bullets": [
-        "**Operational Velocity**: Detailed sentence explaining key impact and metrics with authentic depth.",
-        "**System Reliability**: Telemetry and automated guardrails safeguarding mission-critical production uptime.",
-        "**Scalable Invariants**: Modular decoupling ensuring predictable throughput as data density expands."
+        "**Core Foundation**: Clear explanation of fundamental principles with 15-25 words of factual context.",
+        "**Strategic Alignment**: Deep analysis of operational impact and organizational relevance.",
+        "**Implementation Scope**: Concrete overview of timeline milestones and expected efficiency improvements."
       ],
-      "image_search_query": "specific realistic query for authentic operational subject",
-      "visual_description": "documentary scene description of real-world subject in authentic setting",
-      "image_prompt": "High resolution documentary photography of authentic subject in operational setting, realistic lighting, 4k, hyper-detailed, clean sharp focus"
+      "image_prompt": "Specific photographic description of real equipment, workflow, or workspace matching this slide, realistic lighting, 8k"
     }
   ]
-}`;
+}
+
+### SLIDE ROLES FOR THIS BATCH:
+${roleDescription}
+
+Generate exactly ${countInChunk} slides numbered ${chunk.start} through ${chunk.end} of ${totalCount}. Output ONLY raw JSON.`;
 }
 
 async function buildPresentationDeck(topic, slideCount = null, theme = 'dark_modern', keys = {}) {
     const cleanTopic = String(topic || 'Topic Deep-Dive').trim();
     const totalCount = Math.min(20, Math.max(5, (slideCount && !isNaN(slideCount)) ? parseInt(slideCount, 10) : 8));
 
-    const systemPrompt = `You are an Executive Presentation Architect and Principal AI Analyst. Your task is to generate high-caliber, C-level presentation decks in strict JSON format. Strict adherence to the requested schema, slide count, bullet depth (15-25 words per bullet with bold keyword first), and documentary realistic photography prompts on every slide is mandatory. Output ONLY valid JSON with zero markdown codeblock wrappers.`;
+    const systemPrompt = `You are an elite executive presentation designer and subject matter expert. Generate a high-yield, structured presentation for the given topic. You MUST output ONLY a valid JSON object matching the schema. No markdown backticks (\`\`\`json), no chat conversational fluff. CRITICAL RULES: 1. NEVER repeat the slide title, deck title, or topic name inside the 'bullets' array. 2. Every content slide MUST contain 3 to 4 analytical, informative bullet points. 3. Each bullet point MUST be 15 to 25 words long, starting with a bold keyword concept: "**Concept**: Explanation with real metrics, implementation steps, or technical facts." 4. IMAGE PROMPT SPECIFICITY: For every slide, provide an 'image_prompt' that describes a concrete, photographic real-world scene directly tied to that slide's specific sub-topic (avoid abstract shapes, metaphors, or generic keywords). Output ONLY valid raw JSON.`;
 
     // Helper to query LLM providers with resilient fallback
     async function executeLlmPrompt(currentPrompt) {
@@ -1447,7 +1537,8 @@ async function createPptxFile(deck) {
 
             // Right column: AI Generated Visual Image
             const imgPrompt = s.image_prompt || s.visual_prompt || `${normalizedDeck.deck_title} modern corporate executive technology`;
-            const imgUrl = s.image_url || `https://image.pollinations.ai/prompt/${encodeURIComponent(imgPrompt)}?width=800&height=600&nologo=true`;
+            const seed = Math.abs(hashCode(`${normalizedDeck.deck_title}_slide_${idx + 1}`));
+            const imgUrl = s.image_url || buildOptimizedImageUrl(imgPrompt, seed, 1280, 720, 'flux');
 
             slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
                 x: 6.85, y: contentTop, w: colW, h: contentHeight,
@@ -1524,7 +1615,8 @@ async function createPptxFile(deck) {
 
             // Right column: AI Generated Visual Image
             const imgPrompt = s.image_prompt || s.visual_prompt || `${normalizedDeck.deck_title} ${slideTitle}`;
-            const imgUrl = s.image_url || `https://image.pollinations.ai/prompt/${encodeURIComponent(imgPrompt)}?width=800&height=600&nologo=true`;
+            const seed = Math.abs(hashCode(`${normalizedDeck.deck_title}_slide_${idx + 1}`));
+            const imgUrl = s.image_url || buildOptimizedImageUrl(imgPrompt, seed, 1280, 720, 'flux');
 
             slide.addShape(pptx.shapes.ROUNDED_RECTANGLE, {
                 x: 6.85, y: contentTop, w: colW, h: contentHeight,
@@ -2266,8 +2358,9 @@ if (req.method === 'POST' && pathname === '/api/chat') {
                 }
                 if (!cleanPrompt) cleanPrompt = userMessage;
 
-                const encodedPrompt = encodeURIComponent(cleanPrompt);
-                const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&enhance=true&seed=${Math.floor(Math.random() * 1000000)}&model=flux`;
+                const seed = Math.floor(Math.random() * 10000000);
+                const imageUrl = buildOptimizedImageUrl(cleanPrompt, seed, 1280, 720, 'flux');
+                const fallbackUrl = buildFastFallbackImageUrl(cleanPrompt, seed, 1280, 720);
 
                 const replyText = `Here is your generated image for: **"${cleanPrompt}"** ✨\n\n![${cleanPrompt}](${imageUrl})\n\n[📥 Download Image](${imageUrl})`;
 
@@ -2276,6 +2369,7 @@ if (req.method === 'POST' && pathname === '/api/chat') {
                     reply: replyText,
                     isImage: true,
                     imageUrl: imageUrl,
+                    fallbackUrl: fallbackUrl,
                     prompt: cleanPrompt,
                     provider: 'pollinations',
                     model: 'flux',
@@ -2483,7 +2577,7 @@ Core Emotional & Conversational Guidelines:
             const provider = body.provider || ENV.IMAGE_PROVIDER || 'pollinations';
             const apiKey = (body.apiKey || '').trim() || (ENV.IMAGE_API_KEY || ENV.OPENAI_API_KEY || '');
             const model = body.model || '';
-            const size = body.size || '1024x1024';
+            const size = body.size || '1280x720';
             const style = body.style || 'vivid';
 
             if (!prompt) {
@@ -2499,6 +2593,7 @@ Core Emotional & Conversational Guidelines:
             return sendJson(res, 200, {
                 success: true,
                 imageUrl: imageResult.imageUrl,
+                fallbackUrl: imageResult.fallbackUrl,
                 prompt: prompt,
                 revisedPrompt: imageResult.revisedPrompt,
                 provider: imageResult.provider,

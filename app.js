@@ -3250,6 +3250,69 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
         scrollToBottom();
     }
 
+    // Multi-tier graceful error fallback for generated AI images
+    window.handleImageLoadError = function(imgEl, fallbackUrl) {
+        if (!imgEl) return;
+        const retryCount = parseInt(imgEl.getAttribute('data-retries') || '0', 10);
+
+        // Tier 1: Try Fast Fallback (Turbo model at 1280x720)
+        if (retryCount === 0 && fallbackUrl && imgEl.src !== fallbackUrl) {
+            imgEl.setAttribute('data-retries', '1');
+            imgEl.src = fallbackUrl;
+            return;
+        }
+
+        // Tier 2: Try switching model=flux to model=turbo if present in URL
+        if (retryCount <= 1 && imgEl.src.includes('model=flux')) {
+            imgEl.setAttribute('data-retries', '2');
+            imgEl.src = imgEl.src.replace('model=flux', 'model=turbo');
+            return;
+        }
+
+        // Tier 3: Curated high-resolution editorial photography fallback (Unsplash CDN)
+        if (retryCount <= 2) {
+            imgEl.setAttribute('data-retries', '3');
+            imgEl.src = 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1280&q=80';
+            return;
+        }
+
+        // Tier 4: Show graceful retry state (no broken icons)
+        if (imgEl.previousElementSibling) imgEl.previousElementSibling.style.display = 'none';
+        imgEl.style.display = 'none';
+        const parent = imgEl.parentElement;
+        if (parent && !parent.querySelector('.image-error-fallback')) {
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'image-error-fallback';
+            errorDiv.innerHTML = `
+                <i data-lucide="alert-triangle"></i>
+                <span>Visual generation took longer than usual</span>
+                <button type="button" class="retry-image-load-btn" onclick="retryImageCard(this)">
+                    <i data-lucide="refresh-cw"></i> Retry High-Clarity Render
+                </button>
+            `;
+            parent.appendChild(errorDiv);
+            if (typeof lucide !== 'undefined') lucide.createIcons({ root: errorDiv });
+        }
+    };
+
+    window.retryImageCard = function(btn) {
+        const parent = btn.closest('.image-media-wrapper');
+        if (!parent) return;
+        const img = parent.querySelector('img.generated-ai-img');
+        const skeleton = parent.querySelector('.card-img-skeleton');
+        const errDiv = parent.querySelector('.image-error-fallback');
+        if (errDiv) errDiv.remove();
+        if (skeleton) skeleton.style.display = 'flex';
+        if (img) {
+            img.style.display = 'block';
+            img.classList.remove('loaded');
+            img.setAttribute('data-retries', '0');
+            const rawSrc = img.getAttribute('data-src') || img.src;
+            const sep = rawSrc.includes('?') ? '&' : '?';
+            img.src = `${rawSrc}${sep}_t=${Date.now()}`;
+        }
+    };
+
     function renderImageCardHtml(imageData) {
         const prompt = imageData.prompt || 'AI Artwork';
         const cleanPrompt = escapeHtml(prompt);
@@ -3257,12 +3320,33 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
         const cleanProvider = escapeHtml((imageData.provider || 'pollinations').toUpperCase());
         const cleanModel = escapeHtml(imageData.model || 'FLUX');
 
+        // High-speed fallback URL for instant recovery if flux times out
+        const fallbackUrl = imageData.fallbackUrl || (typeof buildFastFallbackImageUrl === 'function' ? buildFastFallbackImageUrl(prompt) : cleanUrl.replace('model=flux', 'model=turbo'));
+        const cleanFallbackUrl = escapeHtml(fallbackUrl);
+
         const imageJsonStr = escapeHtml(JSON.stringify(imageData));
 
         return `
             <div class="ai-generated-image-card">
                 <div class="image-media-wrapper">
-                    <img src="${cleanUrl}" alt="${cleanPrompt}" loading="lazy" class="generated-ai-img clickable-preview" data-src="${cleanUrl}" data-prompt="${cleanPrompt}" title="Click to open Fullscreen Lightbox">
+                    <div class="card-img-skeleton">
+                        <div class="skeleton-shimmer"></div>
+                        <div class="skeleton-loader-content">
+                            <i data-lucide="sparkles" class="skeleton-icon"></i>
+                            <span>Rendering Ultra-HD Visual...</span>
+                            <span class="skeleton-subtext">Optimizing lighting, textures & 8K clarity</span>
+                        </div>
+                    </div>
+                    <img src="${cleanUrl}" 
+                         alt="${cleanPrompt}" 
+                         loading="lazy" 
+                         class="generated-ai-img clickable-preview" 
+                         data-src="${cleanUrl}" 
+                         data-fallback="${cleanFallbackUrl}"
+                         data-prompt="${cleanPrompt}" 
+                         title="Click to open Fullscreen Lightbox"
+                         onload="if(this.previousElementSibling) this.previousElementSibling.style.display='none'; this.classList.add('loaded');"
+                         onerror="handleImageLoadError(this, '${cleanFallbackUrl}');">
                     <div class="image-media-overlay">
                         <button type="button" class="image-overlay-btn open-img-canvas-btn" data-img-data='${imageJsonStr}' title="Open in Canvas Studio">
                             <i data-lucide="layout-panel-right"></i>
@@ -3326,37 +3410,55 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
         return hash;
     }
 
+    const _IMAGE_ABSTRACT_TERMS = /\b(abstract|surreal|geometric shapes?|neon glow|digital wave|glowing swirls?|3D data visualization|hologram|futuristic background|technology background|digital transformation|innovation concept|business concept|modern technology|artificial intelligence concept|data concept|futuristic city|blockchain network)\b/gi;
+    const _STYLE_SUFFIX = 'hyperrealistic professional 8k photography, sharp focus, studio lighting, award-winning composition, clean cinematic depth of field, ultra high-definition textures, color graded';
+
     function buildContextualSlideImageUrl(slide, topic, index) {
         const slideObj = slide || {};
         const rawTitle = slideObj.title || slideObj.slide_title || '';
         const keySubject = String(rawTitle).replace(/[^a-zA-Z0-9 ]/g, '').trim();
 
-        let specificContext = String(slideObj.image_prompt || slideObj.visual_description || slideObj.image_search_query || '').trim();
-        if (!specificContext) {
-            let keyBullet = '';
-            if (Array.isArray(slideObj.bullets) && slideObj.bullets.length > 0) {
-                const firstB = String(slideObj.bullets[0]).replace(/^\*\*.*?\*\*:\s*/, '').replace(/[^a-zA-Z0-9 ]/g, '').trim();
-                keyBullet = firstB.slice(0, 60);
+        let specificContext = String(
+            slideObj.image_prompt ||
+            slideObj.visual_description ||
+            slideObj.image_search_query || ''
+        ).trim();
+
+        if (!specificContext && Array.isArray(slideObj.bullets) && slideObj.bullets.length > 0) {
+            for (const b of slideObj.bullets) {
+                let stripped = String(b).replace(/^\*\*.*?\*\*:\s*/, '').replace(/[^a-zA-Z0-9 ,.]/g, '').trim();
+                if (stripped.length > 20) {
+                    specificContext = stripped.slice(0, 120);
+                    break;
+                }
             }
-            specificContext = `${topic} ${keySubject} ${keyBullet}`.trim() || `${topic} ${keySubject}`;
+        }
+
+        if (!specificContext) {
+            specificContext = `${topic} ${keySubject}`.trim() || `${topic} slide ${index}`;
         }
 
         // Ban generic abstract or surreal buzzwords so photos remain strictly contextual
-        specificContext = specificContext.replace(/\b(abstract|surreal|geometric shapes|neon glow|digital wave|glowing swirls|3D data visualization|hologram|futuristic background)\b/gi, '').trim();
-        if (!specificContext) specificContext = `${topic} ${keySubject}`.trim() || `${topic} slide ${index}`;
+        specificContext = specificContext.replace(_IMAGE_ABSTRACT_TERMS, '').replace(/\s{2,}/g, ' ').trim();
+        if (!specificContext || specificContext.length < 10) {
+            specificContext = `${topic} operational environment, ${keySubject}`;
+        }
 
-        // Enforce realistic, documentary, or technical photography style matching the domain
-        const styleSuffix = 'high resolution documentary photography, editorial photo, realistic lighting, 4k, hyper-detailed, clean sharp focus, authentic context';
-        const enhancedPrompt = specificContext.includes('documentary photography') ? specificContext : `${specificContext}, ${styleSuffix}`;
-
-        // Generate deterministic seed based on topic and slide index so images stay consistent
         const seed = Math.abs(hashCode(`${topic}_slide_${index}`));
 
-        return `https://image.pollinations.ai/prompt/${encodeURIComponent(enhancedPrompt)}?width=900&height=550&nologo=true&seed=${seed}`;
+        if (typeof buildOptimizedImageUrl === 'function') {
+            return buildOptimizedImageUrl(specificContext, seed, 1280, 720, 'flux');
+        }
+
+        const enhancedPrompt = specificContext.includes('8k photography') ? specificContext : `${specificContext}, ${_STYLE_SUFFIX}`;
+        return `https://image.pollinations.ai/prompt/${encodeURIComponent(enhancedPrompt)}?width=1280&height=720&model=flux&nologo=true&enhance=true&quality=high&seed=${seed}`;
     }
 
     window.hashCode = hashCode;
     window.buildContextualSlideImageUrl = buildContextualSlideImageUrl;
+    if (typeof buildFastFallbackImageUrl === 'function') {
+        window.buildFastFallbackImageUrl = buildFastFallbackImageUrl;
+    }
 
     function renderPresentationCardHtml(deck) {
         const title = escapeHtml(deck.deck_title || deck.title || 'Executive Keynote');
@@ -4132,6 +4234,18 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                 elements.canvasMainImage.src = data.imageUrl || '';
                 elements.canvasMainImage.setAttribute('data-src', data.imageUrl || '');
                 elements.canvasMainImage.setAttribute('data-prompt', data.prompt || 'AI Artwork');
+                elements.canvasMainImage.setAttribute('data-fallback', data.fallbackUrl || '');
+                elements.canvasMainImage.onerror = function() {
+                    const fb = this.getAttribute('data-fallback');
+                    if (fb && this.src !== fb) {
+                        this.src = fb;
+                    } else if (this.src.includes('model=flux')) {
+                        this.src = this.src.replace('model=flux', 'model=turbo');
+                    } else {
+                        this.onerror = null;
+                        this.src = 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1280&q=80';
+                    }
+                };
                 elements.canvasMainImage.style.display = 'block';
             }
             if (elements.imageEmptyPlaceholder) elements.imageEmptyPlaceholder.style.display = 'none';
@@ -4383,7 +4497,7 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                 const imgPrompt = currentSlide.image_prompt || currentSlide.visual_prompt || `${deckTitle} ${slideTitle}`;
                 const imgUrl = currentSlide.image_url || buildContextualSlideImageUrl(currentSlide, deckTitle, currentIdx + 1);
                 const seed = Math.abs(hashCode(`${deckTitle}_slide_${currentIdx + 1}`));
-                const fallbackUrl = currentSlide.fallback_image_url || `https://picsum.photos/seed/${seed}/900/550`;
+                const fallbackUrl = currentSlide.fallback_image_url || `https://image.pollinations.ai/prompt/${encodeURIComponent(imgPrompt)}?width=900&height=550&nologo=true&seed=${seed}&model=turbo`;
                 const objectiveText = currentSlide.objective || `Deliver an authoritative strategic briefing on ${deckTitle}.`;
 
                 let bulletsList = [];
@@ -4451,7 +4565,7 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                                          class="slide-ai-visual-img"
                                          loading="lazy"
                                          onload="if(this.previousElementSibling) this.previousElementSibling.style.display='none'; this.classList.add('loaded');"
-                                         onerror="if(this.previousElementSibling) this.previousElementSibling.style.display='none'; this.classList.add('loaded'); this.src='${fallbackUrl}';" />
+                                         onerror="if(this.previousElementSibling) this.previousElementSibling.style.display='none'; this.classList.add('loaded'); if(this.src!=='${fallbackUrl}'){this.src='${fallbackUrl}';}else{this.onerror=null;this.src='https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=900&q=80';}" />
                                     <div class="slide-image-badge-pill">
                                         <i data-lucide="sparkles"></i>
                                         <span class="image-prompt-text" title="${escapeHtml(imgPrompt)}">${escapeHtml(imgPrompt)}</span>
@@ -4470,7 +4584,7 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                 const imgPrompt = currentSlide.image_prompt || currentSlide.visual_prompt || `${deckTitle} ${slideTitle}`;
                 const imgUrl = currentSlide.image_url || buildContextualSlideImageUrl(currentSlide, deckTitle, currentIdx + 1);
                 const seed = Math.abs(hashCode(`${deckTitle}_slide_${currentIdx + 1}`));
-                const fallbackUrl = currentSlide.fallback_image_url || `https://picsum.photos/seed/${seed}/900/550`;
+                const fallbackUrl = currentSlide.fallback_image_url || `https://image.pollinations.ai/prompt/${encodeURIComponent(imgPrompt)}?width=900&height=550&nologo=true&seed=${seed}&model=turbo`;
                 const objectiveText = currentSlide.objective || '';
 
                 let bulletsList = [];
@@ -4512,27 +4626,27 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                         <div class="split-image-container">
                             <div class="split-cards-column" style="display: flex; flex-direction: column;">
                                 ${objectiveText ? `
-                                <div class="slide-objective-card">
-                                    <i data-lucide="crosshair"></i>
-                                    <span><strong>CORE OBJECTIVE:</strong> ${escapeHtml(objectiveText)}</span>
-                                </div>` : ''}
+                                 <div class="slide-objective-card">
+                                     <i data-lucide="crosshair"></i>
+                                     <span><strong>CORE OBJECTIVE:</strong> ${escapeHtml(objectiveText)}</span>
+                                 </div>` : ''}
                                 <div class="split-bullets-group">
                                     ${bulletsHtml}
                                 </div>
                             </div>
                             <div class="split-media-column">
                                 <div class="slide-media-card">
-                                    <div class="slide-img-skeleton">
-                                        <div class="skeleton-shimmer"></div>
-                                        <i data-lucide="image" class="skeleton-icon"></i>
-                                        <span>Rendering AI Visual...</span>
-                                    </div>
-                                    <img src="${imgUrl}" 
-                                         alt="${escapeHtml(imgPrompt)}" 
-                                         class="slide-ai-visual-img"
-                                         loading="lazy"
-                                         onload="if(this.previousElementSibling) this.previousElementSibling.style.display='none'; this.classList.add('loaded');"
-                                         onerror="if(this.previousElementSibling) this.previousElementSibling.style.display='none'; this.classList.add('loaded'); this.src='${fallbackUrl}';" />
+                                     <div class="slide-img-skeleton">
+                                         <div class="skeleton-shimmer"></div>
+                                         <i data-lucide="image" class="skeleton-icon"></i>
+                                         <span>Rendering AI Visual...</span>
+                                     </div>
+                                     <img src="${imgUrl}" 
+                                          alt="${escapeHtml(imgPrompt)}" 
+                                          class="slide-ai-visual-img"
+                                          loading="lazy"
+                                          onload="if(this.previousElementSibling) this.previousElementSibling.style.display='none'; this.classList.add('loaded');"
+                                          onerror="if(this.previousElementSibling) this.previousElementSibling.style.display='none'; this.classList.add('loaded'); if(this.src!=='${fallbackUrl}'){this.src='${fallbackUrl}';}else{this.onerror=null;this.src='https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=900&q=80';}" />
                                     <div class="slide-image-badge-pill">
                                         <i data-lucide="sparkles"></i>
                                         <span class="image-prompt-text" title="${escapeHtml(imgPrompt)}">${escapeHtml(imgPrompt)}</span>
@@ -5588,7 +5702,7 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
             const provider = options.provider || state.imageProvider || 'pollinations';
             const apiKey = (options.apiKey || state.imageApiKey || state.apiKeys.openai || '').trim();
             const style = options.style || state.defaultImageStyle || 'vivid';
-            const size = options.size || state.defaultImageSize || '1024x1024';
+            const size = options.size || state.defaultImageSize || '1280x720';
 
             const res = await fetch('/api/generate-image', {
                 method: 'POST',
@@ -5616,6 +5730,7 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
 
             const imageArtifactData = {
                 imageUrl: data.imageUrl,
+                fallbackUrl: data.fallbackUrl || (typeof buildFastFallbackImageUrl === 'function' ? buildFastFallbackImageUrl(prompt) : ''),
                 prompt: prompt,
                 revisedPrompt: data.revisedPrompt || prompt,
                 provider: data.provider || provider,

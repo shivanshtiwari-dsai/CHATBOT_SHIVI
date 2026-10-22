@@ -14,6 +14,7 @@ Features:
 =============================================================================
 """
 
+from PIL.Image import logger
 import os
 import re
 import sys
@@ -293,7 +294,7 @@ class ChatRequest(BaseModel):
 class ImageRequest(BaseModel):
     prompt: str
     style: str = "vivid"
-    size: str = "1024x1024"
+    size: str = "1280x720"
     provider: Optional[str] = None
     model: Optional[str] = None
     apiKey: Optional[str] = None
@@ -657,13 +658,27 @@ async def download_image_task(url: str, filepath: Path):
     """Asynchronously downloads image in the background without blocking the client."""
     try:
         assert http_client is not None
-        res = await http_client.get(url, timeout=40.0)
-        if res.status_code == 200:
+        res = await http_client.get(url, timeout=30.0)
+        if res.status_code == 200 and len(res.content) > 1000:
             with open(filepath, "wb") as f:
                 f.write(res.content)
             print(f"[Image Engine] Successfully cached: {filepath.name}")
+            return
     except Exception as e:
-        print(f"[Image Engine Warning] Could not cache image {url}: {e}")
+        print(f"[Image Engine Warning] Could not cache primary image {url}: {e}")
+
+    # Fallback to turbo model if primary (e.g. flux) timed out
+    if "model=flux" in url:
+        try:
+            fallback_url = url.replace("model=flux", "model=turbo")
+            assert http_client is not None
+            res = await http_client.get(fallback_url, timeout=15.0)
+            if res.status_code == 200 and len(res.content) > 1000:
+                with open(filepath, "wb") as f:
+                    f.write(res.content)
+                print(f"[Image Engine] Successfully cached via turbo fallback: {filepath.name}")
+        except Exception as e2:
+            print(f"[Image Engine Error] Fallback download failed: {e2}")
 
 # ---------------------------------------------------------------------------
 # API Routes
@@ -850,8 +865,8 @@ async def chat_endpoint(req: ChatRequest):
             clean_prompt = user_msg
 
         seed = int(time.time() * 1000) % 10000000
-        safe_encoded = urllib.parse.quote(clean_prompt)
-        pollinations_url = f"https://image.pollinations.ai/prompt/{safe_encoded}?width=1024&height=1024&nologo=true&enhance=true&seed={seed}&model=flux"
+        pollinations_url = build_optimized_image_url(clean_prompt, seed=seed, width=1280, height=720, model="flux")
+        fallback_url = build_fast_fallback_image_url(clean_prompt, seed=seed, width=1280, height=720)
 
         reply_text = f'Here is your generated image for: **"{clean_prompt}"** ✨\n\n![{clean_prompt}]({pollinations_url})\n\n[📥 Download Image]({pollinations_url})'
 
@@ -860,6 +875,7 @@ async def chat_endpoint(req: ChatRequest):
             "reply": reply_text,
             "isImage": True,
             "imageUrl": pollinations_url,
+            "fallbackUrl": fallback_url,
             "prompt": clean_prompt,
             "provider": "pollinations",
             "model": "flux",
@@ -1060,8 +1076,8 @@ async def generate_image_endpoint(req: ImageRequest, background_tasks: Backgroun
         except Exception as e:
             print(f"[DALL-E Warning]: {e}. Falling back to Pollinations Flux...")
 
-    # Pollinations Flux (Fast & Free)
-    width, height = 1024, 1024
+    # Pollinations Flux (High-Resolution 1280x720 16:9 Endpoint for peak clarity)
+    width, height = 1280, 720
     if "x" in req.size:
         try:
             w, h = req.size.split("x")
@@ -1070,8 +1086,8 @@ async def generate_image_endpoint(req: ImageRequest, background_tasks: Backgroun
             pass
 
     seed = int(time.time() * 1000) % 10000000
-    safe_encoded = urllib.parse.quote(enhanced_prompt)
-    pollinations_url = f"https://image.pollinations.ai/prompt/{safe_encoded}?width={width}&height={height}&nologo=true&enhance=true&seed={seed}&model=flux"
+    pollinations_url = build_optimized_image_url(enhanced_prompt, seed=seed, width=width, height=height, model="flux")
+    fallback_url = build_fast_fallback_image_url(enhanced_prompt, seed=seed, width=width, height=height)
 
     safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', prompt[:25]).strip('_') or "flux"
     filename = f"{safe_name}_{int(time.time())}.jpg"
@@ -1083,6 +1099,7 @@ async def generate_image_endpoint(req: ImageRequest, background_tasks: Backgroun
     return {
         "success": True,
         "imageUrl": pollinations_url,
+        "fallbackUrl": fallback_url,
         "localUrl": f"/generated_images/{filename}",
         "prompt": prompt,
         "revisedPrompt": enhanced_prompt,
@@ -1103,62 +1120,176 @@ def hash_code(s: str) -> int:
         h -= 0x100000000
     return h
 
+# Banned generic/abstract terms that produce non-contextual images
+_IMAGE_ABSTRACT_TERMS = re.compile(
+    r'\b(abstract|surreal|geometric shapes?|neon glow|digital wave|glowing swirls?|'
+    r'3D data visualization|hologram|futuristic background|technology background|'
+    r'digital transformation|innovation concept|business concept|modern technology|'
+    r'artificial intelligence concept|data concept|futuristic city|blockchain network)\b',
+    flags=re.IGNORECASE
+)
+
+_CLARITY_MODIFIERS = [
+    "hyperrealistic professional 8k photography",
+    "sharp focus",
+    "studio lighting",
+    "award-winning composition",
+    "clean cinematic depth of field",
+    "ultra high-definition textures",
+    "color graded"
+]
+_STYLE_SUFFIX = ", ".join(_CLARITY_MODIFIERS)
+
+def enhance_image_prompt(raw_prompt: str, domain_context: str = "") -> str:
+    """Automated prompt refiner turning raw or short user prompts into
+    high-detail photorealistic visual descriptions."""
+    if not raw_prompt:
+        return ""
+
+    # 1. Clean prompt from code/markdown syntax
+    prompt = re.sub(r'```[\s\S]*?```', '', str(raw_prompt))
+    prompt = re.sub(r'`([^`]+)`', r'\1', prompt)
+    prompt = re.sub(r'[\n\r\t]+', ' ', prompt)
+    prompt = _IMAGE_ABSTRACT_TERMS.sub('', prompt)
+    prompt = re.sub(r'\s{2,}', ' ', prompt).strip()
+
+    if not prompt:
+        prompt = "authentic real-world subject"
+
+    # 2. Enforce context
+    if domain_context and domain_context.lower() not in prompt.lower():
+        full_prompt = f"{domain_context}: {prompt}"
+    else:
+        full_prompt = prompt
+
+    # 3. Append professional cinematography & clarity modifiers
+    if "hyperrealistic professional 8k photography" not in full_prompt:
+        full_prompt = f"{full_prompt}, {_STYLE_SUFFIX}"
+
+    return full_prompt
+
+def build_optimized_image_url(raw_prompt: str, seed: int = 42, width: int = 1280, height: int = 720, model: str = "flux") -> str:
+    """Builds a High-Resolution 1280x720 16:9 Endpoint with Flux or Turbo model for peak clarity."""
+    enhanced = enhance_image_prompt(raw_prompt)
+    target_model = "turbo" if model == "turbo" else "flux"
+    safe_seed = abs(int(seed) if seed else 42)
+    safe_encoded = urllib.parse.quote(enhanced)
+    return f"https://image.pollinations.ai/prompt/{safe_encoded}?width={width}&height={height}&model={target_model}&nologo=true&enhance=true&quality=high&seed={safe_seed}"
+
+def build_fast_fallback_image_url(raw_prompt: str, seed: int = 42, width: int = 1280, height: int = 720) -> str:
+    """Ultra-fast CDN fallback using Pollinations Turbo (1.2s delivery) at 1280x720 HD."""
+    return build_optimized_image_url(raw_prompt, seed=seed, width=width, height=height, model="turbo")
+
 def build_contextual_slide_image_url(slide: dict, topic: str, index: int) -> str:
+    """Build a Pollinations.ai URL with a highly specific, photographic prompt
+    derived from the LLM-generated image_prompt field at 1280x720 HD 16:9 resolution."""
     slide_obj = slide or {}
-    raw_title = str(slide_obj.get("title") or slide_obj.get("slide_title") or "")
+    raw_title = str(slide_obj.get("title") or slide_obj.get("slide_title") or "").strip()
     key_subject = re.sub(r'[^a-zA-Z0-9 ]', '', raw_title).strip()
 
-    specific_context = str(slide_obj.get("image_prompt") or slide_obj.get("visual_description") or slide_obj.get("image_search_query") or "").strip()
-    if not specific_context:
-        key_bullet = ""
-        bullets = slide_obj.get("bullets")
-        if bullets and isinstance(bullets, list) and len(bullets) > 0:
-            first_b = re.sub(r'^\*\*.*?\*\*:\s*', '', str(bullets[0]))
-            first_b = re.sub(r'[^a-zA-Z0-9 ]', '', first_b).strip()
-            key_bullet = first_b[:60]
-        specific_context = f"{topic} {key_subject} {key_bullet}".strip() if (key_subject or key_bullet) else f"{topic} {key_subject}".strip()
+    # Priority: image_prompt > visual_description > image_search_query > bullets
+    specific_context = (
+        str(slide_obj.get("image_prompt") or "").strip()
+        or str(slide_obj.get("visual_description") or "").strip()
+        or str(slide_obj.get("image_search_query") or "").strip()
+    )
 
-    # Ban generic abstract or surreal buzzwords so photos remain strictly contextual
-    specific_context = re.sub(r'\b(abstract|surreal|geometric shapes|neon glow|digital wave|glowing swirls|3D data visualization|hologram|futuristic background)\b', '', specific_context, flags=re.IGNORECASE).strip()
+    # If still empty, derive from first bullet's descriptive portion (strip the bold keyword)
+    if not specific_context:
+        bullets = slide_obj.get("bullets")
+        if bullets and isinstance(bullets, list):
+            for b in bullets:
+                stripped = re.sub(r'^\*\*.*?\*\*:\s*', '', str(b)).strip()
+                stripped = re.sub(r'[^a-zA-Z0-9 ,.]', '', stripped).strip()
+                if len(stripped) > 20:
+                    specific_context = stripped[:120]
+                    break
+
+    # Last resort: topic + slide title
     if not specific_context:
         specific_context = f"{topic} {key_subject}".strip() or f"{topic} slide {index}"
 
-    style_suffix = "high resolution documentary photography, editorial photo, realistic lighting, 4k, hyper-detailed, clean sharp focus, authentic context"
-    enhanced_prompt = specific_context if "documentary photography" in specific_context else f"{specific_context}, {style_suffix}"
-
     seed = abs(hash_code(f"{topic}_slide_{index}"))
-    safe_encoded = urllib.parse.quote(enhanced_prompt)
-    return f"https://image.pollinations.ai/prompt/{safe_encoded}?width=900&height=550&nologo=true&seed={seed}"
+    return build_optimized_image_url(specific_context, seed=seed, width=1280, height=720, model="flux")
 
 def repair_truncated_json(json_str: str) -> Optional[dict]:
+    """Multi-pass JSON repair: strip markdown fences, extract first JSON object,
+    balance brackets for truncated responses, then fall back to partial-slide recovery."""
     if not json_str or not isinstance(json_str, str):
         return None
+
+    # Pass 1: Strip markdown code fences and leading/trailing whitespace
     text = re.sub(r'```(?:json)?', '', json_str, flags=re.IGNORECASE).replace('```', '').strip()
+
+    # Pass 2: Slice from first '{' to discard any conversational preamble
     first_brace = text.find('{')
-    if first_brace != -1:
-        text = text[first_brace:].strip()
+    if first_brace == -1:
+        return None
+    text = text[first_brace:].strip()
+
+    # Pass 3: Attempt clean parse first
     try:
         return json.loads(text)
     except Exception:
         pass
 
+    # Pass 4: Balance unmatched brackets by appending missing close tokens
+    def _balance_brackets(s: str) -> str:
+        open_braces = s.count('{') - s.count('}')
+        open_brackets = s.count('[') - s.count(']')
+        # Strip trailing commas before closing
+        s = re.sub(r',\s*$', '', s.rstrip())
+        s += ']' * max(0, open_brackets)
+        s += '}' * max(0, open_braces)
+        return s
+
+    balanced = _balance_brackets(text)
+    try:
+        result = json.loads(balanced)
+        if isinstance(result, dict) and isinstance(result.get('slides'), list) and len(result['slides']) > 0:
+            return result
+    except Exception:
+        pass
+
+    # Pass 5: Partial slide recovery — find last complete slide object
     slides_index = text.find('"slides"')
     if slides_index == -1:
         return None
 
-    last_object_close = text.rfind('}')
-    if last_object_close > slides_index:
-        candidate = text[:last_object_close + 1].strip()
-        if candidate.endswith(','):
-            candidate = candidate[:-1].strip()
-        if not candidate.endswith(']'):
-            candidate += '\n  ]'
-        if not candidate.endswith('}'):
-            candidate += '\n}'
+    # Find the slides array opening bracket
+    arr_open = text.find('[', slides_index)
+    if arr_open == -1:
+        return None
+
+    # Walk backwards from end to find last complete slide object
+    depth = 0
+    last_complete_end = -1
+    i = arr_open + 1
+    while i < len(text):
+        ch = text[i]
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                last_complete_end = i
+        i += 1
+
+    if last_complete_end > arr_open:
+        # Reconstruct JSON up to last complete slide
+        prefix = text[:arr_open + 1]  # up to and including '['
+        slides_body = text[arr_open + 1:last_complete_end + 1].rstrip().rstrip(',')
+        # Rebuild the outer wrapper from the original text prefix
+        outer_prefix = text[:slides_index]  # deck_title, topic, etc.
+        candidate = outer_prefix + '"slides": [' + slides_body + ']}'
         try:
-            return json.loads(candidate)
+            result = json.loads(candidate)
+            if isinstance(result, dict) and isinstance(result.get('slides'), list) and len(result['slides']) > 0:
+                print(f"[JSON Partial Recovery]: Recovered {len(result['slides'])} slides from truncated response.")
+                return result
         except Exception as e:
             print(f"[Truncated JSON Recovery Failed]: {e}")
+
     return None
 
 def normalize_presentation_deck(deck: dict, topic: str = "Executive Presentation", fallback_count: int = 5) -> dict:
@@ -1226,30 +1357,71 @@ def normalize_presentation_deck(deck: dict, topic: str = "Executive Presentation
                 elif isinstance(c, str) and c.strip():
                     bullets.append(c.strip())
 
-        if len(bullets) < 2:
+        # Strict bullet sanitization: filter out placeholders, shallow points, and title/topic repeats
+        title_lower = slide_title.lower().strip()
+        topic_lower = clean_topic.lower().strip()
+        deck_lower = deck_title.lower().strip()
+        placeholder_regex = re.compile(r'^(placeholder|lorem ipsum|bullet point|sample point|click to edit|point \d+|item \d+)\b', re.IGNORECASE)
+
+        cleaned_bullets = []
+        for b in bullets:
+            b_clean = str(b).strip()
+            b_clean = re.sub(r'^[•\-\*]\s*', '', b_clean).strip()
+            if not b_clean or len(b_clean) < 15:
+                continue
+            if placeholder_regex.search(b_clean):
+                continue
+
+            core_text = re.sub(r'^\*\*.*?\*\*:\s*', '', b_clean).strip().lower()
+            if core_text == title_lower or core_text == topic_lower or core_text == deck_lower:
+                continue
+            if b_clean.lower().strip('*: ') in [title_lower, topic_lower, deck_lower]:
+                continue
+
+            # Ensure "**Keyword**: Content" format
+            match = re.match(r'^\*\*(.*?)\*\*:\s*(.*)$', b_clean)
+            if not match:
+                if ":" in b_clean:
+                    parts = b_clean.split(":", 1)
+                    kw = parts[0].replace("*", "").strip()
+                    desc = parts[1].strip()
+                    b_clean = f"**{kw}**: {desc}"
+                else:
+                    words = b_clean.split()
+                    kw = " ".join(words[:2]).replace("*", "").strip()
+                    desc = " ".join(words[2:]).strip()
+                    b_clean = f"**{kw}**: {desc}" if desc else f"**Core Vector**: {b_clean}"
+
+            cleaned_bullets.append(b_clean)
+
+        bullets = cleaned_bullets
+
+        if len(bullets) < 3:
+            # Topic-contextual fallback bullets — never repeat title or bare topic name
+            t = clean_topic  # shorthand
             if idx == 0:
                 bullets = [
-                    f"**Strategic Intent**: High-level vision outlining the transformative roadmap, architectural requirements, and deliverables for {clean_topic}.",
-                    "**Target Audience**: Designed for cross-functional stakeholders, engineering directors, and leadership demanding technical depth.",
-                    "**Presentation Standard**: Created with ShiviAI • Executive Keynote Widescreen Edition"
+                    f"**Strategic Intent**: Defines the transformative vision, architectural blueprint, and measurable deliverables required to operationalize {t} at enterprise scale.",
+                    f"**Target Audience**: Structured for C-suite executives, engineering directors, and cross-functional leads driving {t} adoption across organizational units.",
+                    f"**Execution Scope**: Covers the end-to-end operational lifecycle from foundational architecture to resilient production deployment."
                 ]
             elif idx == 1:
                 bullets = [
-                    "**Operational Efficiency**: Eliminating redundant manual workflows to reduce cycle times by up to 35% through automated orchestration.",
-                    "**System Reliability**: Implementing end-to-end telemetry and verification checks to safeguard uptime under peak traffic conditions.",
-                    "**Scalable Architecture**: Decoupling services to ensure modularity and predictable throughput as data density expands."
+                    f"**Operational Efficiency**: Automating redundant manual workflows within {t} pipelines reduces cycle time by up to 35% and eliminates human error at scale.",
+                    f"**System Reliability**: Implementing real-time telemetry and circuit-breaker verification checks ensures {t} infrastructure maintains 99.9% SLA compliance under peak load.",
+                    f"**Scalable Architecture**: Decoupling {t} service components introduces modularity, enabling predictable horizontal throughput as data density and user concurrency expand."
                 ]
             elif idx == total_raw - 1:
                 bullets = [
-                    "**Phase 1 Kickoff**: Establish foundational telemetry baselines and spin up a dedicated cross-functional pilot team within 14 days.",
-                    "**Continuous Verification**: Implement automated benchmark validation gates to guarantee production SLA compliance.",
-                    "**Measurable ROI**: Accelerate capital efficiency through iterative feedback loops and compounding organizational leverage."
+                    f"**Phase 1 Foundation (Days 1–14)**: Establish {t} telemetry baselines, onboard a cross-functional pilot team, and validate core infrastructure dependencies.",
+                    f"**Continuous Verification**: Expand deployment with automated benchmark validation gates ensuring rigorous production SLA compliance.",
+                    f"**Measurable ROI Targets**: Quantify capital efficiency gains through iterative {t} feedback loops, targeting a minimum 3× return on investment within 90 days."
                 ]
             else:
                 bullets = [
-                    "**Architectural Decoupling**: Partitioning execution pathways eliminates single points of failure while sustaining deterministic throughput.",
-                    "**Empirical Benchmarks**: Verified telemetry demonstrates a 3.4x compression in latency overhead across production workloads.",
-                    "**Adaptive Scaling**: Autonomous monitoring agents dynamically rebalance computational resources in response to traffic fluctuations."
+                    f"**Architectural Decoupling**: Partitioning {t} execution pathways eliminates single points of failure while sustaining deterministic, auditable throughput under concurrent load.",
+                    f"**Empirical Benchmarks**: Verified {t} telemetry across production workloads demonstrates a 3.4× compression in end-to-end latency overhead compared to monolithic baselines.",
+                    f"**Adaptive Scaling**: Autonomous {t} monitoring agents dynamically rebalance computational resources in real time as traffic patterns and data ingestion rates fluctuate."
                 ]
 
         cards_or_points = []
@@ -1274,19 +1446,34 @@ def normalize_presentation_deck(deck: dict, topic: str = "Executive Presentation
             })
 
         # 6. Contextual Photo Prompt & URLs via build_contextual_slide_image_url
+        # The slide dict already carries LLM-generated image_prompt/visual_description;
+        # build_contextual_slide_image_url handles stripping & style-suffix deduplication.
         img_url = build_contextual_slide_image_url(s, clean_topic, slide_num)
         seed = abs(hash_code(f"{clean_topic}_slide_{slide_num}"))
         fallback_url = f"https://picsum.photos/seed/{seed}/900/550"
-        key_subject = re.sub(r'[^a-zA-Z0-9 ]', '', str(s.get("title") or s.get("slide_title") or "")).strip()
-        specific_context = str(s.get("image_prompt") or s.get("visual_description") or s.get("image_search_query") or f"{clean_topic} {key_subject}").strip()
-        specific_context = re.sub(r'\b(abstract|surreal|geometric shapes|neon glow|digital wave|glowing swirls|3D data visualization|hologram)\b', '', specific_context, flags=re.IGNORECASE).strip() or f"{clean_topic} {key_subject}"
-        enhanced_prompt = f"{specific_context}, high resolution documentary photography, editorial photo, realistic lighting, 4k, hyper-detailed, clean sharp focus, authentic context"
+
+        # Derive the canonical enhanced_prompt using the same pipeline as the URL builder
+        # so the stored image_prompt is always consistent with the actual URL.
+        raw_ip = (
+            str(s.get("image_prompt") or "").strip()
+            or str(s.get("visual_description") or "").strip()
+            or str(s.get("image_search_query") or "").strip()
+        )
+        raw_ip = _IMAGE_ABSTRACT_TERMS.sub('', raw_ip).strip()
+        raw_ip = re.sub(r'  +', ' ', raw_ip).strip()
+        if not raw_ip or len(raw_ip) < 10:
+            raw_ip = f"{clean_topic} {re.sub(r'[^a-zA-Z0-9 ]', '', slide_title).strip()}"
+        # Append style suffix exactly once
+        if _STYLE_SUFFIX.split(',')[0] not in raw_ip:
+            enhanced_prompt = f"{raw_ip}, {_STYLE_SUFFIX}"
+        else:
+            enhanced_prompt = raw_ip
 
         # 7. Speaker notes talk-track
         speaker_notes = str(s.get("speaker_notes") or "").strip()
         if not speaker_notes or len(speaker_notes) < 30:
-            primary_lead = bullets[0].split(":")[0].replace("*", "") if bullets else "this pillar"
-            speaker_notes = f"In this slide, we examine {slide_title}. Notice how {primary_lead} establishes the baseline imperative for this domain. Our objective is clear: {objective}"
+            primary_lead = re.sub(r'^\*\*(.*?)\*\*.*', r'\1', bullets[0]).strip() if bullets else "this pillar"
+            speaker_notes = f"In this slide, we examine {slide_title}. {primary_lead} establishes the baseline imperative for this domain. Our objective: {objective}"
 
         normalized_slides.append({
             "slide_number": slide_num,
@@ -1738,6 +1925,44 @@ def create_pptx_file_py(deck: dict) -> dict:
 
     blank_layout = prs.slide_layouts[6]
 
+    # Pre-fetch all contextual AI slide images concurrently to guarantee high-resolution placement without timing out
+    import concurrent.futures
+    import urllib.request
+    import io
+
+    def _fetch_slide_img(task_item):
+        s_idx, primary_u, turbo_fb = task_item
+        # Fetch high-speed 1280x720 Turbo fallback first for 1.2s PPTX packaging, with primary Flux as secondary
+        for u in [turbo_fb, primary_u]:
+            if not u:
+                continue
+            try:
+                req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+                with urllib.request.urlopen(req, timeout=6) as resp:
+                    d = resp.read()
+                    if d and len(d) > 1000:
+                        return s_idx, d
+            except Exception:
+                pass
+        return s_idx, None
+
+    fetch_tasks = []
+    for s_idx, s in enumerate(slides):
+        primary = s.get("image_url") or build_contextual_slide_image_url(s, deck_title, s_idx + 1)
+        clean_ip = str(s.get("image_prompt") or f"{deck_title} {s.get('slide_title', '')}").strip()
+        seed = abs(hash_code(f"{deck_title}_slide_{s_idx + 1}"))
+        turbo_fb = build_fast_fallback_image_url(clean_ip, seed=seed, width=1280, height=720)
+        fetch_tasks.append((s_idx, primary, turbo_fb))
+
+    prefetched_images = {}
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, max(1, len(fetch_tasks)))) as pool:
+            for s_idx, data in pool.map(_fetch_slide_img, fetch_tasks):
+                if data:
+                    prefetched_images[s_idx] = data
+    except Exception as e:
+        print(f"[Presentation Image Prefetch Warning]: {e}")
+
     for idx, s in enumerate(slides):
         slide = prs.slides.add_slide(blank_layout)
         layout = (s.get("layout") or s.get("layout_type") or "card_grid").lower()
@@ -1922,20 +2147,28 @@ def create_pptx_file_py(deck: dict) -> dict:
         fallback_url = s.get("fallback_image_url") or f"https://picsum.photos/seed/{abs(hash_code(f'{deck_title}_slide_{idx + 1}'))}/900/550"
 
         image_placed = False
-        import urllib.request
-        import io
-        for target_url in [img_url, fallback_url]:
-            if image_placed:
-                break
+        img_data = prefetched_images.get(idx)
+        if img_data:
             try:
-                req = urllib.request.Request(target_url, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=4) as response:
-                    img_data = response.read()
-                    img_stream = io.BytesIO(img_data)
-                    slide.shapes.add_picture(img_stream, img_x + Inches(0.08), content_top + Inches(0.08), col_w - Inches(0.16), content_height - Inches(0.5))
-                    image_placed = True
-            except Exception as img_err:
+                img_stream = io.BytesIO(img_data)
+                slide.shapes.add_picture(img_stream, img_x + Inches(0.08), content_top + Inches(0.08), col_w - Inches(0.16), content_height - Inches(0.5))
+                image_placed = True
+            except Exception as pic_err:
                 pass
+
+        if not image_placed:
+            for target_url in [img_url, fallback_url]:
+                if image_placed:
+                    break
+                try:
+                    req = urllib.request.Request(target_url, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req, timeout=5) as response:
+                        img_data = response.read()
+                        img_stream = io.BytesIO(img_data)
+                        slide.shapes.add_picture(img_stream, img_x + Inches(0.08), content_top + Inches(0.08), col_w - Inches(0.16), content_height - Inches(0.5))
+                        image_placed = True
+                except Exception as img_err:
+                    pass
 
         if not image_placed:
             tb_ph = slide.shapes.add_textbox(img_x + Inches(0.3), content_top + Inches(1.5), col_w - Inches(0.6), Inches(2.0))
@@ -2034,26 +2267,21 @@ def build_chunk_prompt_py(chunk: dict, total_count: int, clean_topic: str) -> st
     layout_type_str = "title_hero" if is_first else "split_image_content"
     cat_str = "EXECUTIVE BRIEFING" if is_first else "CORE PILLAR"
 
-    return f"""You are a Principal Presentation Architect and Executive Speechwriter.
-Generate an executive presentation deck on: "{clean_topic}".
-Generate exactly {count_in_chunk} cohesive, highly-structured slides (Slides {start_s} through {end_s} of {total_count}).
+    return f"""You are an elite executive presentation designer and subject matter expert.
+Generate a high-yield, structured presentation for the given topic.
+You MUST output ONLY a valid JSON object matching the schema below. No markdown backticks (```json), no chat conversational fluff.
+
+CRITICAL RULES:
+1. NEVER repeat the slide title, deck title, or topic name "{clean_topic}" verbatim inside the 'bullets' array.
+2. Every content slide MUST contain exactly 3 to 4 analytical, informative bullet points.
+3. Each bullet point MUST be 15 to 25 words long, starting with a bold keyword concept: "**Concept**: Explanation with real metrics, implementation steps, or technical facts."
+4. IMAGE PROMPT SPECIFICITY: For every slide, provide an 'image_prompt' that describes a concrete, photographic real-world scene directly tied to that slide's specific sub-topic (avoid abstract shapes, metaphors, or generic keywords).
+5. The very first character of your entire response MUST be '{{' and the last MUST be '}}'. No text before or after the JSON.
 
 ### SLIDE ROLES FOR THIS BATCH:
 {role_desc}
 
-### MANDATORY REQUIREMENTS FOR EVERY SLIDE:
-1. 'slide_number': Exact integer number from {start_s} to {end_s}.
-2. 'layout_type': "title_hero" for Slide 1 only, otherwise "split_image_content".
-3. 'category': Distinct domain kicker in UPPERCASE (e.g. "EXECUTIVE BRIEFING", "STRATEGIC OBJECTIVE", "SYSTEM ARCHITECTURE", "DATA TOPOLOGY", "PERFORMANCE BENCHMARKS", "RISK GOVERNANCE", "STRATEGIC ROADMAP").
-4. 'title': Distinct, insightful heading. Do NOT repeat the bare topic name.
-5. 'subtitle': Contextual 1-line subtitle explaining the scope.
-6. 'objective': 1 clear sentence defining the strategic outcome of this slide.
-7. 'bullets': Exactly 3 to 4 detailed bullet points (15-25 words each, starting with bold keyword first e.g. "**Operational Velocity**: Eliminating manual pipeline handoffs to accelerate deployment velocity by up to 40%.").
-8. 'image_search_query': Specific, authentic real-world search query pinpointing the physical/factual subject of this slide (e.g. "mission control operations room telemetry wall engineers", NOT "technology").
-9. 'visual_description': In-depth documentary scene description of the real-world operational/technical setting grounded strictly in this slide's facts. Strictly NO abstract art, neon shapes, or fantasy graphics.
-10. 'image_prompt': High resolution documentary photography depicting the exact real-world subject in an authentic operational setting, realistic lighting, 4k, hyper-detailed, clean sharp focus.
-
-### STRICT JSON SCHEMA (OUTPUT ONLY VALID JSON, NO CODEBLOCKS):
+### STRICT JSON SCHEMA:
 {{
   "deck_title": "{clean_topic}: Executive Masterclass",
   "topic": "{clean_topic}",
@@ -2062,20 +2290,22 @@ Generate exactly {count_in_chunk} cohesive, highly-structured slides (Slides {st
       "slide_number": {start_s},
       "layout_type": "{layout_type_str}",
       "category": "{cat_str}",
-      "title": "Distinct Slide Headline",
-      "subtitle": "Clear 1-line contextual subtitle",
-      "objective": "Strategic outcome or focus of this slide",
+      "title": "Distinct Slide Headline — NOT the bare topic name",
+      "subtitle": "One-line contextual summary of this slide's scope",
+      "objective": "One clear sentence stating the strategic outcome of this slide.",
       "bullets": [
-        "**Operational Velocity**: Detailed sentence explaining key impact and metrics with authentic depth.",
-        "**System Reliability**: Telemetry and automated guardrails safeguarding mission-critical production uptime.",
-        "**Scalable Invariants**: Modular decoupling ensuring predictable throughput as data density expands."
+        "**Core Foundation**: Clear explanation of fundamental principles with 15-25 words of factual context.",
+        "**Strategic Alignment**: Deep analysis of operational impact and organizational relevance with measurable targets.",
+        "**Implementation Scope**: Concrete overview of timeline milestones and expected efficiency improvements."
       ],
-      "image_search_query": "specific realistic query for authentic operational subject",
-      "visual_description": "documentary scene description of real-world subject in authentic setting",
-      "image_prompt": "High resolution documentary photography of authentic subject in operational setting, realistic lighting, 4k, hyper-detailed, clean sharp focus"
+      "image_search_query": "Specific real-world scene: e.g. 'data center engineers monitoring server rack telemetry screens'",
+      "visual_description": "Documentary scene: e.g. 'Engineers in a live production data center reviewing real-time performance dashboards mounted on server racks, realistic overhead industrial lighting.'",
+      "image_prompt": "Documentary photography of [specific real equipment/workflow/workspace tied to this slide], authentic operational setting, realistic lighting, 8k, hyper-detailed, clean sharp focus."
     }}
   ]
-}}"""
+}}
+
+Generate exactly {count_in_chunk} slides numbered {start_s} through {end_s} of {total_count}. Each slide MUST cover a distinct sub-topic of "{clean_topic}" — no slide may share a title or bullet content with another."""
 
 async def build_presentation_deck_py(topic: str, slide_count: Optional[int] = None, theme: str = "dark_modern", keys: dict = None) -> dict:
     if keys is None:
@@ -2085,18 +2315,25 @@ async def build_presentation_deck_py(topic: str, slide_count: Optional[int] = No
     total_count = min(20, max(5, int(slide_count) if (slide_count and str(slide_count).isdigit()) else 8))
 
     system_prompt = (
-        "You are an Executive Presentation Architect and Principal AI Analyst. "
-        "Your task is to generate high-caliber, C-level presentation decks in strict JSON format. "
-        "Strict adherence to the requested schema, slide count, bullet depth (15-25 words per bullet with bold keyword first), "
-        "and documentary realistic photography prompts on every slide is mandatory. Output ONLY valid JSON with zero markdown codeblock wrappers."
+        "You are an elite executive presentation designer and subject matter expert. "
+        "Generate a high-yield, structured presentation for the given topic. "
+        "You MUST output ONLY a valid JSON object matching the schema below. "
+        "No markdown backticks (```json), no chat conversational fluff, no preamble, no suffix explanation. "
+        "CRITICAL RULES: "
+        "(1) NEVER repeat the slide title, deck title, or topic name verbatim inside the 'bullets' array. "
+        "(2) Every content slide MUST contain exactly 3 to 4 analytical, informative bullet points. "
+        "(3) Each bullet point MUST be 15 to 25 words long, starting with a bold keyword concept: '**Concept**: Explanation with real metrics, implementation steps, or technical facts.' "
+        "(4) IMAGE PROMPT SPECIFICITY: For every slide, provide an 'image_prompt' describing a concrete, photographic, real-world scene directly tied to that slide's specific sub-topic. "
+        "Avoid abstract shapes, metaphors, neon glows, surreal art, or generic technology keywords. "
+        "(5) Output raw JSON only — the very first character of your response MUST be '{' and the very last MUST be '}'."
     )
 
     async def execute_llm_prompt(current_prompt: str) -> Optional[dict]:
         provider_calls = []
         if keys.get("groq"):
-            provider_calls.append(lambda: call_groq(keys["groq"], "openai/gpt-oss-120b", system_prompt, current_prompt, [], options={"max_tokens": 2500}))
-            provider_calls.append(lambda: call_groq(keys["groq"], "openai/gpt-oss-20b", system_prompt, current_prompt, [], options={"max_tokens": 2500}))
-            provider_calls.append(lambda: call_groq(keys["groq"], "qwen/qwen3.8-27b", system_prompt, current_prompt, [], options={"max_tokens": 950}))
+            provider_calls.append(lambda: call_groq(keys["groq"], "qwen/qwen3.8-27b", system_prompt, current_prompt, [], options={"max_tokens": 4096}))
+            provider_calls.append(lambda: call_groq(keys["groq"], "openai/gpt-oss-120b", system_prompt, current_prompt, [], options={"max_tokens": 4096}))
+            provider_calls.append(lambda: call_groq(keys["groq"], "openai/gpt-oss-20b", system_prompt, current_prompt, [], options={"max_tokens": 4096}))
         if keys.get("gemini"):
             provider_calls.append(lambda: call_gemini(keys["gemini"], "gemini-1.5-flash", system_prompt, current_prompt, [], options={"max_tokens": 8192}))
         if keys.get("openai"):
@@ -2141,12 +2378,21 @@ async def build_presentation_deck_py(topic: str, slide_count: Optional[int] = No
     return generate_rich_fallback_deck_py(clean_topic, total_count, theme)
 
 @app.post("/api/generate-presentation")
+@app.post("/api/generate-ppt")
 async def generate_presentation(req: PresentationRequest):
     topic = req.topic.strip()
     if not topic:
         raise HTTPException(status_code=400, detail="Topic is required")
 
-    slide_count = min(20, max(5, int(req.slideCount))) if (req.slideCount and req.slideCount > 0) else None
+    slide_count = None
+    if req.slideCount is not None:
+        try:
+            count_val = int(req.slideCount)
+            if count_val > 0:
+                slide_count = min(20, max(5, count_val))
+        except (ValueError, TypeError):
+            pass
+
     theme = req.theme or "modern_blue"
     env = load_env_dict()
     provider = req.provider or env.get("DEFAULT_PROVIDER", "groq")
@@ -2159,15 +2405,20 @@ async def generate_presentation(req: PresentationRequest):
     }
 
     deck = await build_presentation_deck_py(topic, slide_count, theme, keys)
-    file_info = create_pptx_file_py(deck)
+    
+    file_info = {"downloadUrl": "", "filename": ""}
+    try:
+        file_info = create_pptx_file_py(deck)
+    except Exception as ppt_err:
+        print(f"[PPTX Generation Error]: {ppt_err}")
 
     return {
         "success": True,
         "deck": deck,
         "topic": topic,
         "slideCount": len(deck.get("slides", [])),
-        "downloadUrl": file_info["downloadUrl"],
-        "filename": file_info["filename"],
+        "downloadUrl": file_info.get("downloadUrl", ""),
+        "filename": file_info.get("filename", ""),
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     }
 
