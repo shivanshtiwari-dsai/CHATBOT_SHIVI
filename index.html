@@ -206,6 +206,12 @@
 
                 <!-- 3. RIGHT: User profile avatar/initials only (compact drop-down menu) -->
                 <div class="header-right">
+                    <!-- MongoDB Real-Time Sync Indicator Pill -->
+                    <div class="db-status-pill" id="dbStatusPill" title="Database: MongoDB Persistent Storage Active" role="button" tabindex="0">
+                        <span class="db-status-dot" id="dbStatusDot"></span>
+                        <span class="db-status-text" id="dbStatusText">MongoDB Active</span>
+                    </div>
+
                     <!-- Live Voice Mode Quick Launch Pill -->
                     <button class="live-voice-header-btn" id="headerLiveVoiceBtn" title="Launch Gemini / ChatGPT Live Voice Mode" aria-label="Live Voice Mode">
                         <span class="live-voice-pulse-dot"></span>
@@ -1231,6 +1237,52 @@
 
                 <!-- TAB 3: DATA & FILE STORAGE -->
                 <div class="brain-tab-pane" id="pane-storage">
+                    <!-- MongoDB Architecture & Real-Time Sync Status -->
+                    <div class="mongo-status-card" id="mongoStatusCard">
+                        <div class="mongo-status-header">
+                            <div class="mongo-status-title">
+                                <i data-lucide="database" style="color: #34d399;"></i>
+                                <span>MongoDB Persistent Cloud Storage</span>
+                            </div>
+                            <span class="mongo-status-tag" id="mongoStatusTag">
+                                <span class="db-status-dot" id="mongoCardDot"></span>
+                                <span id="mongoTagText">Connected</span>
+                            </span>
+                        </div>
+                        <div class="mongo-uri-display" id="mongoUriDisplay">mongodb://127.0.0.1:27017/shiviai_db</div>
+                        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 10px;">
+                            All user profiles, full multi-turn conversations, messages, and Keynote presentation decks are automatically saved to MongoDB with seamless offline local fallback.
+                        </p>
+                        <div class="mongo-collections-row">
+                            <div class="mongo-col-pill">
+                                <span>Users Collection</span>
+                                <strong id="mongoUserCount">0</strong>
+                            </div>
+                            <div class="mongo-col-pill">
+                                <span>Chat Sessions</span>
+                                <strong id="mongoSessionCount">0</strong>
+                            </div>
+                            <div class="mongo-col-pill">
+                                <span>PPT Keynote Decks</span>
+                                <strong id="mongoDeckCount">0</strong>
+                            </div>
+                            <div class="mongo-col-pill">
+                                <span>Storage Engine</span>
+                                <strong id="mongoEngineMode">Mongoose 8</strong>
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap;">
+                            <button type="button" class="btn btn-secondary btn-sm" id="btnSyncMongoData" title="Push all current local conversations to MongoDB">
+                                <i data-lucide="refresh-cw"></i>
+                                <span>Sync Local Chats to MongoDB</span>
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm" id="btnRefreshMongoHealth" title="Check MongoDB connection health">
+                                <i data-lucide="activity"></i>
+                                <span>Check DB Health</span>
+                            </button>
+                        </div>
+                    </div>
+
                     <div class="storage-stats-grid">
                         <div class="storage-stat-card">
                             <div class="stat-icon" style="background: rgba(139, 92, 246, 0.15); color: var(--primary);"><i data-lucide="message-square"></i></div>

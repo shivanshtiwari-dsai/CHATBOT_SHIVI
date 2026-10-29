@@ -18,6 +18,8 @@ const crypto = require('node:crypto');
 const Brain = require('./brain.js');
 const PptxGenJS = require('pptxgenjs');
 const { enhanceImagePrompt, buildOptimizedImageUrl, buildFastFallbackImageUrl } = require('./imageService.js');
+const { connectDB, isMongoConnected, getConnectionStatus } = require('./config/db.js');
+const storage = require('./services/storageService.js');
 
 const ROOT_DIR = __dirname;
 const ENV_PATH = path.join(ROOT_DIR, '.env');
@@ -102,12 +104,20 @@ function verifyAuthToken(token) {
     }
 }
 
+function getAuthenticatedUser(req) {
+    const authHeader = (req && req.headers && req.headers['authorization']) || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
+    if (!token) return null;
+    return verifyAuthToken(token);
+}
+
 // ==========================================
 // ENVIRONMENT LOADER (.env parser)
 // ==========================================
 function loadEnv() {
     const env = {
         PORT: 5500,
+        MONGO_URI: 'mongodb://127.0.0.1:27017/shiviai_db',
         GEMINI_API_KEY: '',
         GROQ_API_KEY: '',
         OPENAI_API_KEY: '',
@@ -144,7 +154,7 @@ function loadEnv() {
         }
     }
 
-    for (const k of ['PORT', 'GEMINI_API_KEY', 'GROQ_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'IMAGE_API_KEY', 'IMAGE_PROVIDER', 'DEFAULT_PROVIDER']) {
+    for (const k of ['PORT', 'MONGO_URI', 'GEMINI_API_KEY', 'GROQ_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'IMAGE_API_KEY', 'IMAGE_PROVIDER', 'DEFAULT_PROVIDER', 'GOOGLE_CLIENT_ID', 'GITHUB_CLIENT_ID']) {
         if (process.env[k]) {
             env[k] = process.env[k];
         }
@@ -162,6 +172,13 @@ function saveEnv(newValues) {
         '# SHIVI AI — ENVIRONMENT CONFIGURATION & API KEYS',
         '# =================================================================',
         `PORT=${merged.PORT || 5500}`,
+        '',
+        '# 🍃 MONGODB DATABASE CONFIGURATION',
+        `MONGO_URI=${merged.MONGO_URI || 'mongodb://127.0.0.1:27017/shiviai_db'}`,
+        '',
+        '# 🔑 OAUTH CONFIGURATION',
+        `GOOGLE_CLIENT_ID=${merged.GOOGLE_CLIENT_ID || ''}`,
+        `GITHUB_CLIENT_ID=${merged.GITHUB_CLIENT_ID || ''}`,
         '',
         '# 🌟 GOOGLE GEMINI API KEY (100% Free - https://aistudio.google.com/app/apikey)',
         `GEMINI_API_KEY=${merged.GEMINI_API_KEY || ''}`,
@@ -238,7 +255,7 @@ function sendJson(res, statusCode, data) {
     res.writeHead(statusCode, {
         'Content-Type': 'application/json; charset=utf-8',
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization'
     });
     res.end(JSON.stringify(data));
@@ -2013,7 +2030,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'OPTIONS') {
         res.writeHead(204, {
             'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
             'Access-Control-Allow-Headers': 'Content-Type, Authorization'
         });
         return res.end();
@@ -2039,6 +2056,8 @@ const server = http.createServer(async (req, res) => {
                 openrouter: Boolean(ENV.OPENROUTER_API_KEY),
                 image: true
             },
+            mongodb: isMongoConnected(),
+            db_status: getConnectionStatus(),
             defaultProvider: ENV.DEFAULT_PROVIDER || 'groq',
             timestamp: Date.now()
         });
@@ -2064,8 +2083,7 @@ const server = http.createServer(async (req, res) => {
                 return sendJson(res, 400, { success: false, error: 'Password must be at least 6 characters.' });
             }
 
-            const users = loadUsers();
-            const existing = users.find(u => u.email.toLowerCase() === email);
+            const existing = await storage.findUserByEmail(email);
             if (existing) {
                 return sendJson(res, 409, { success: false, error: 'An account with this email already exists. Please sign in.' });
             }
@@ -2073,19 +2091,14 @@ const server = http.createServer(async (req, res) => {
             const salt = crypto.randomBytes(16).toString('hex');
             const passwordHash = hashPassword(password, salt);
             const initials = name.split(' ').map(n => n[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() || 'U';
-            const newUser = {
-                id: 'usr_' + Date.now().toString(36) + '_' + crypto.randomBytes(4).toString('hex'),
+            const newUser = await storage.createUser({
                 name: name,
                 email: email,
                 salt: salt,
                 passwordHash: passwordHash,
-                createdAt: new Date().toISOString(),
                 avatar: initials,
                 plan: 'free'
-            };
-
-            users.push(newUser);
-            saveUsers(users);
+            });
 
             const token = createAuthToken(newUser, 14);
             return sendJson(res, 201, {
@@ -2118,8 +2131,7 @@ const server = http.createServer(async (req, res) => {
                 return sendJson(res, 400, { success: false, error: 'Email and password are required.' });
             }
 
-            const users = loadUsers();
-            const user = users.find(u => u.email.toLowerCase() === email);
+            const user = await storage.findUserByEmail(email);
             if (!user) {
                 return sendJson(res, 401, { success: false, error: 'Invalid email or password.' });
             }
@@ -2142,6 +2154,7 @@ const server = http.createServer(async (req, res) => {
                     provider: user.provider || 'email',
                     avatar: user.avatar || user.name.slice(0, 2).toUpperCase(),
                     plan: user.plan || 'free',
+                    settings: user.settings || {},
                     createdAt: user.createdAt
                 },
                 message: `Welcome back, ${user.name}!`
@@ -2160,30 +2173,25 @@ const server = http.createServer(async (req, res) => {
             const provider = (body.provider || 'google').toLowerCase();
             const avatar = (body.avatar || '').trim() || (name.split(' ').map(n => n[0]).filter(Boolean).slice(0, 2).join('').toUpperCase() || 'U');
 
-            const users = loadUsers();
-            let user = users.find(u => u.email.toLowerCase() === email);
+            let user = await storage.findUserByEmail(email);
 
             if (!user) {
                 const salt = crypto.randomBytes(16).toString('hex');
-                user = {
-                    id: 'usr_oauth_' + provider + '_' + crypto.randomBytes(4).toString('hex'),
+                user = await storage.createUser({
                     name: name,
                     email: email,
                     provider: provider,
                     salt: salt,
                     passwordHash: hashPassword(crypto.randomBytes(32).toString('hex'), salt),
-                    createdAt: new Date().toISOString(),
                     avatar: avatar,
                     plan: 'pro'
-                };
-                users.push(user);
-                saveUsers(users);
+                });
             } else {
-                // Update profile name, provider, and avatar if provided
-                user.name = name || user.name;
-                user.provider = provider;
-                if (avatar) user.avatar = avatar;
-                saveUsers(users);
+                user = await storage.updateUser(user.id, {
+                    name: name || user.name,
+                    provider: provider,
+                    avatar: avatar || user.avatar
+                });
             }
 
             const token = createAuthToken(user, 30);
@@ -2197,6 +2205,7 @@ const server = http.createServer(async (req, res) => {
                     provider: user.provider || provider,
                     avatar: user.avatar || avatar,
                     plan: user.plan || 'pro',
+                    settings: user.settings || {},
                     createdAt: user.createdAt
                 },
                 message: `Successfully connected with ${provider === 'github' ? 'GitHub' : 'Google'}!`
@@ -2209,15 +2218,12 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && pathname === '/api/auth/me') {
         try {
-            const authHeader = req.headers['authorization'] || '';
-            const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
-            const verified = verifyAuthToken(token);
+            const verified = getAuthenticatedUser(req);
             if (!verified) {
                 return sendJson(res, 401, { success: false, error: 'Session expired or invalid token.' });
             }
 
-            const users = loadUsers();
-            const user = users.find(u => u.id === verified.sub || u.email === verified.email);
+            const user = await storage.findUserById(verified.sub) || await storage.findUserByEmail(verified.email);
             if (!user) {
                 return sendJson(res, 404, { success: false, error: 'User profile not found.' });
             }
@@ -2231,6 +2237,7 @@ const server = http.createServer(async (req, res) => {
                     provider: user.provider || 'email',
                     avatar: user.avatar || user.name.slice(0, 2).toUpperCase(),
                     plan: user.plan || 'free',
+                    settings: user.settings || {},
                     createdAt: user.createdAt
                 }
             });
@@ -2241,6 +2248,193 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && pathname === '/api/auth/logout') {
         return sendJson(res, 200, { success: true, message: 'Logged out successfully.' });
+    }
+
+    // ----------------------------------------------------
+    // API: MONGODB & DATABASE STATUS (GET /api/db/status)
+    // ----------------------------------------------------
+    if (req.method === 'GET' && pathname === '/api/db/status') {
+        try {
+            const health = await storage.getDatabaseHealth();
+            return sendJson(res, 200, {
+                success: true,
+                ...health
+            });
+        } catch (err) {
+            return sendJson(res, 500, { success: false, error: err.message });
+        }
+    }
+
+    // ----------------------------------------------------
+    // API: USER SETTINGS (GET & POST /api/user/settings)
+    // ----------------------------------------------------
+    if (pathname === '/api/user/settings') {
+        const authUser = getAuthenticatedUser(req);
+        if (req.method === 'GET') {
+            try {
+                if (!authUser) {
+                    return sendJson(res, 200, { success: true, settings: {}, mode: 'guest' });
+                }
+                const user = await storage.findUserById(authUser.sub) || await storage.findUserByEmail(authUser.email);
+                return sendJson(res, 200, {
+                    success: true,
+                    settings: (user && user.settings) || {}
+                });
+            } catch (err) {
+                return sendJson(res, 500, { success: false, error: err.message });
+            }
+        }
+        if (req.method === 'POST') {
+            try {
+                const body = await parseJsonBody(req);
+                const targetId = authUser ? authUser.sub : (body.userId || 'guest');
+                const settings = body.settings || body;
+                await storage.updateUserSettings(targetId, settings);
+                return sendJson(res, 200, { success: true, message: 'Settings saved successfully.' });
+            } catch (err) {
+                return sendJson(res, 500, { success: false, error: err.message });
+            }
+        }
+    }
+
+    // ----------------------------------------------------
+    // API: BATCH SYNC LOCALSTORAGE SESSIONS TO MONGODB (POST /api/chats/sync)
+    // ----------------------------------------------------
+    if (req.method === 'POST' && pathname === '/api/chats/sync') {
+        try {
+            const body = await parseJsonBody(req);
+            const authUser = getAuthenticatedUser(req);
+            const userId = authUser ? authUser.sub : (body.userId || 'guest');
+            const userEmail = authUser ? authUser.email : (body.userEmail || '');
+            const sessions = Array.isArray(body.sessions) ? body.sessions : [];
+
+            const syncResult = await storage.syncUserSessions(sessions, userId, userEmail);
+            return sendJson(res, 200, syncResult);
+        } catch (err) {
+            return sendJson(res, 500, { success: false, error: err.message });
+        }
+    }
+
+    // ----------------------------------------------------
+    // API: CHAT SESSIONS & CONVERSATIONS
+    // ----------------------------------------------------
+    // Append message to session: POST /api/chats/:id/messages
+    const msgMatch = pathname.match(/^\/api\/chats\/([^/]+)\/messages$/);
+    if (req.method === 'POST' && msgMatch) {
+        try {
+            const sessionId = decodeURIComponent(msgMatch[1]);
+            const body = await parseJsonBody(req);
+            const authUser = getAuthenticatedUser(req);
+            const userId = authUser ? authUser.sub : (body.userId || 'guest');
+            const userEmail = authUser ? authUser.email : (body.userEmail || '');
+
+            const result = await storage.appendMessageToSession(sessionId, body.message || body, userId, userEmail);
+            return sendJson(res, 200, result);
+        } catch (err) {
+            return sendJson(res, 500, { success: false, error: err.message });
+        }
+    }
+
+    // List all sessions: GET /api/chats or /api/sessions
+    if (req.method === 'GET' && (pathname === '/api/chats' || pathname === '/api/sessions')) {
+        try {
+            const authUser = getAuthenticatedUser(req);
+            const queryUserId = parsedUrl.searchParams.get('userId');
+            const queryEmail = parsedUrl.searchParams.get('email');
+
+            const userId = authUser ? authUser.sub : (queryUserId || 'guest');
+            const userEmail = authUser ? authUser.email : (queryEmail || '');
+
+            const result = await storage.getUserSessions(userId, userEmail);
+            return sendJson(res, 200, result);
+        } catch (err) {
+            return sendJson(res, 500, { success: false, error: err.message });
+        }
+    }
+
+    // Create or update session: POST /api/chats or /api/sessions
+    if (req.method === 'POST' && (pathname === '/api/chats' || pathname === '/api/sessions')) {
+        try {
+            const body = await parseJsonBody(req);
+            const authUser = getAuthenticatedUser(req);
+            const userId = authUser ? authUser.sub : (body.userId || 'guest');
+            const userEmail = authUser ? authUser.email : (body.userEmail || '');
+
+            const result = await storage.saveOrUpdateSession(body.session || body, userId, userEmail);
+            return sendJson(res, 200, result);
+        } catch (err) {
+            return sendJson(res, 500, { success: false, error: err.message });
+        }
+    }
+
+    // Single session operations: /api/chats/:id
+    const chatMatch = pathname.match(/^\/api\/chats\/([^/]+)$/);
+    if (chatMatch) {
+        const sessionId = decodeURIComponent(chatMatch[1]);
+        if (req.method === 'GET') {
+            try {
+                const session = await storage.getSessionById(sessionId);
+                if (!session) {
+                    return sendJson(res, 404, { success: false, error: 'Session not found.' });
+                }
+                return sendJson(res, 200, { success: true, session });
+            } catch (err) {
+                return sendJson(res, 500, { success: false, error: err.message });
+            }
+        }
+        if (req.method === 'PUT') {
+            try {
+                const body = await parseJsonBody(req);
+                const authUser = getAuthenticatedUser(req);
+                const userId = authUser ? authUser.sub : (body.userId || 'guest');
+                const userEmail = authUser ? authUser.email : (body.userEmail || '');
+
+                const updateData = Object.assign({}, body, { id: sessionId });
+                const result = await storage.saveOrUpdateSession(updateData, userId, userEmail);
+                return sendJson(res, 200, result);
+            } catch (err) {
+                return sendJson(res, 500, { success: false, error: err.message });
+            }
+        }
+        if (req.method === 'DELETE') {
+            try {
+                const authUser = getAuthenticatedUser(req);
+                const userId = authUser ? authUser.sub : null;
+                const result = await storage.deleteUserSession(sessionId, userId);
+                return sendJson(res, 200, result);
+            } catch (err) {
+                return sendJson(res, 500, { success: false, error: err.message });
+            }
+        }
+    }
+
+    // ----------------------------------------------------
+    // API: PRESENTATIONS & PPT DECKS (GET /api/decks & DELETE /api/decks/:id)
+    // ----------------------------------------------------
+    if (req.method === 'GET' && pathname === '/api/decks') {
+        try {
+            const authUser = getAuthenticatedUser(req);
+            const queryUserId = parsedUrl.searchParams.get('userId');
+            const queryEmail = parsedUrl.searchParams.get('email');
+            const userId = authUser ? authUser.sub : (queryUserId || 'guest');
+            const userEmail = authUser ? authUser.email : (queryEmail || '');
+
+            const result = await storage.getUserDecks(userId, userEmail);
+            return sendJson(res, 200, result);
+        } catch (err) {
+            return sendJson(res, 500, { success: false, error: err.message });
+        }
+    }
+
+    const deckMatch = pathname.match(/^\/api\/decks\/([^/]+)$/);
+    if (req.method === 'DELETE' && deckMatch) {
+        try {
+            const deckId = decodeURIComponent(deckMatch[1]);
+            const result = await storage.deletePptDeck(deckId);
+            return sendJson(res, 200, result);
+        } catch (err) {
+            return sendJson(res, 500, { success: false, error: err.message });
+        }
     }
 
     if (req.method === 'POST' && pathname === '/api/auth/forgot-password') {
@@ -2419,6 +2613,21 @@ if (req.method === 'POST' && pathname === '/api/chat') {
                 const deck = await buildPresentationDeck(topic, slideCount, 'modern_blue', keys);
                 const fileInfo = await createPptxFile(deck);
 
+                const authUser = getAuthenticatedUser(req);
+                const uId = authUser ? authUser.sub : (body.userId || 'guest');
+                const uEmail = authUser ? authUser.email : (body.userEmail || '');
+                storage.savePptDeck({
+                    title: deck.title || deck.deck_title,
+                    topic: topic,
+                    theme: 'modern_blue',
+                    slideCount: deck.slides.length,
+                    filename: fileInfo.filename,
+                    downloadUrl: fileInfo.downloadUrl,
+                    filePath: fileInfo.filePath,
+                    slides: deck.slides,
+                    deckData: deck
+                }, uId, uEmail, body.sessionId || '').catch(() => {});
+
                 const slidesMarkdown = deck.slides.map((s, idx) => {
                     const bulletsText = (s.bullets || []).map(b => `  - ${b}`).join('\n');
                     return `**Slide ${idx + 1}: ${s.slide_title}**\n${bulletsText}`;
@@ -2554,6 +2763,24 @@ Core Emotional & Conversational Guidelines:
                 result = await tryBrain();
             }
 
+            if (body.sessionId) {
+                const authUser = getAuthenticatedUser(req);
+                const uId = authUser ? authUser.sub : (body.userId || 'guest');
+                const uEmail = authUser ? authUser.email : (body.userEmail || '');
+                storage.appendMessageToSession(body.sessionId, {
+                    role: 'user',
+                    content: userMessage,
+                    attachments: attachments
+                }, uId, uEmail).catch(() => {});
+                storage.appendMessageToSession(body.sessionId, {
+                    role: 'assistant',
+                    content: result.reply,
+                    provider: result.provider,
+                    model: result.model,
+                    persona: persona
+                }, uId, uEmail).catch(() => {});
+            }
+
             return sendJson(res, 200, {
                 success: true,
                 reply: result.reply,
@@ -2641,6 +2868,21 @@ Core Emotional & Conversational Guidelines:
 
             const deck = await buildPresentationDeck(topic, slideCount, theme, keys);
             const fileInfo = await createPptxFile(deck);
+
+            const authUser = getAuthenticatedUser(req);
+            const uId = authUser ? authUser.sub : (body.userId || 'guest');
+            const uEmail = authUser ? authUser.email : (body.userEmail || '');
+            storage.savePptDeck({
+                title: deck.title || deck.deck_title,
+                topic: topic,
+                theme: theme,
+                slideCount: deck.slides.length,
+                filename: fileInfo.filename,
+                downloadUrl: fileInfo.downloadUrl,
+                filePath: fileInfo.filePath,
+                slides: deck.slides,
+                deckData: deck
+            }, uId, uEmail, body.sessionId || '').catch(() => {});
 
             return sendJson(res, 200, {
                 success: true,
@@ -2748,6 +2990,8 @@ Core Emotional & Conversational Guidelines:
             imageProvider: ENV.IMAGE_PROVIDER || 'pollinations',
             googleClientId: ENV.GOOGLE_CLIENT_ID || '',
             githubClientId: ENV.GITHUB_CLIENT_ID || '',
+            mongoConfigured: !!ENV.MONGO_URI,
+            mongoStatus: getConnectionStatus(),
             keysConfigured: {
                 gemini: !!ENV.GEMINI_API_KEY,
                 groq: !!ENV.GROQ_API_KEY,
@@ -2779,6 +3023,7 @@ Core Emotional & Conversational Guidelines:
             if (body.imageKey !== undefined) updates.IMAGE_API_KEY = body.imageKey.trim();
             if (body.imageProvider !== undefined) updates.IMAGE_PROVIDER = body.imageProvider.trim();
             if (body.defaultProvider !== undefined) updates.DEFAULT_PROVIDER = body.defaultProvider.trim();
+            if (body.mongoUri !== undefined) updates.MONGO_URI = body.mongoUri.trim();
 
             ENV = saveEnv(updates);
             return sendJson(res, 200, { success: true, message: 'Configuration saved to .env file!' });
@@ -2888,6 +3133,15 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`👉 Local Web URL: http://localhost:${PORT}`);
     console.log(`👉 Network URL:   http://127.0.0.1:${PORT}`);
     console.log('==================================================\n');
+
+    // Connect to MongoDB with graceful non-blocking automatic local fallback
+    connectDB().then(() => {
+        storage.seedLocalUsersToMongo().catch(err => {
+            console.warn('[MongoDB] Initial migration notice:', err.message);
+        });
+    }).catch(err => {
+        console.warn('[MongoDB] Startup connection notice:', err.message);
+    });
 });
 
 process.on('SIGINT', () => {

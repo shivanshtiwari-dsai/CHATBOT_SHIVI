@@ -77,6 +77,10 @@ function buildOptimizedImageUrl(rawPrompt, seed = 42, width = 1280, height = 720
 /**
  * Ultra-fast CDN fallback using Pollinations Turbo (1.2s delivery)
  */
+function buildFastFallbackImageUrl(rawPrompt, seed = 42, width = 1280, height = 720) {
+  return buildOptimizedImageUrl(rawPrompt, seed, width, height, 'turbo');
+}
+
 /**
  * Multi-Tier Slide Visual Fallback Engine
  * Generates Level 0 (Turbo + Staggered Seed), Level 1 (Contextual Unsplash), and Level 2 (Ultra-Safe Tech Fallback)

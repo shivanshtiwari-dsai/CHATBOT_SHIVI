@@ -9556,3 +9556,138 @@ button {
     }
 }
 
+/* ==========================================
+   MONGODB PERSISTENCE & DATABASE STATUS UI
+   ========================================== */
+.db-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    margin-right: 6px;
+    background: rgba(16, 185, 129, 0.08);
+    border: 1px solid rgba(16, 185, 129, 0.25);
+    border-radius: var(--radius-full, 9999px);
+    font-size: 0.74rem;
+    font-weight: 500;
+    color: #34d399;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.2s ease;
+}
+
+.db-status-pill:hover {
+    background: rgba(16, 185, 129, 0.15);
+    border-color: rgba(16, 185, 129, 0.45);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 10px rgba(16, 185, 129, 0.2);
+}
+
+.db-status-pill.local-mode {
+    background: rgba(245, 158, 11, 0.08);
+    border-color: rgba(245, 158, 11, 0.25);
+    color: #fbbf24;
+}
+
+.db-status-pill.local-mode:hover {
+    background: rgba(245, 158, 11, 0.15);
+    border-color: rgba(245, 158, 11, 0.45);
+}
+
+.db-status-dot {
+    width: 6.5px;
+    height: 6.5px;
+    border-radius: 50%;
+    background: #10b981;
+    box-shadow: 0 0 7px rgba(16, 185, 129, 0.8);
+    flex-shrink: 0;
+    animation: dbPulse 2s infinite ease-in-out;
+}
+
+.db-status-dot.local-mode {
+    background: #f59e0b;
+    box-shadow: 0 0 7px rgba(245, 158, 11, 0.8);
+}
+
+@keyframes dbPulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.55; transform: scale(0.85); }
+}
+
+.mongo-status-card {
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.06), rgba(6, 182, 212, 0.04));
+    border: 1px solid rgba(16, 185, 129, 0.2);
+    border-radius: var(--radius-lg, 12px);
+    padding: 16px;
+    margin-bottom: 20px;
+}
+
+.mongo-status-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.mongo-status-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-primary, #f4f4f5);
+}
+
+.mongo-status-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    border-radius: 9999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    background: rgba(16, 185, 129, 0.15);
+    color: #34d399;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.mongo-status-tag.fallback {
+    background: rgba(245, 158, 11, 0.15);
+    color: #fbbf24;
+    border-color: rgba(245, 158, 11, 0.3);
+}
+
+.mongo-uri-display {
+    font-family: var(--font-mono, monospace);
+    font-size: 0.8rem;
+    color: var(--text-muted, #a1a1aa);
+    background: rgba(0, 0, 0, 0.25);
+    padding: 6px 10px;
+    border-radius: 6px;
+    margin-bottom: 12px;
+    word-break: break-all;
+}
+
+.mongo-collections-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.mongo-col-pill {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 0.76rem;
+}
+
+.mongo-col-pill strong {
+    display: block;
+    font-size: 1rem;
+    color: var(--text-primary, #f4f4f5);
+    margin-top: 2px;
+}
+
+

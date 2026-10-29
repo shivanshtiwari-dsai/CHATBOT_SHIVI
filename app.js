@@ -206,6 +206,11 @@ Identity Directive:
             artifact: null,       // { type: 'ppt'|'image'|'doc', data: any, title: string, subtitle: string }
             currentSlideIndex: 0,
             isGeneratingPPT: false
+        },
+        db: {
+            isConnected: false,
+            mode: 'local_fallback',
+            stats: { users: 0, sessions: 0, decks: 0 }
         }
     };
 
@@ -213,6 +218,20 @@ Identity Directive:
     // DOM ELEMENT REFERENCES
     // ==========================================
     const elements = {
+        // MongoDB Status Elements
+        dbStatusPill: document.getElementById('dbStatusPill'),
+        dbStatusDot: document.getElementById('dbStatusDot'),
+        dbStatusText: document.getElementById('dbStatusText'),
+        mongoStatusTag: document.getElementById('mongoStatusTag'),
+        mongoTagText: document.getElementById('mongoTagText'),
+        mongoCardDot: document.getElementById('mongoCardDot'),
+        mongoUriDisplay: document.getElementById('mongoUriDisplay'),
+        mongoUserCount: document.getElementById('mongoUserCount'),
+        mongoSessionCount: document.getElementById('mongoSessionCount'),
+        mongoDeckCount: document.getElementById('mongoDeckCount'),
+        btnSyncMongoData: document.getElementById('btnSyncMongoData'),
+        btnRefreshMongoHealth: document.getElementById('btnRefreshMongoHealth'),
+
         // Sidebar
         sidebar: document.getElementById('sidebar'),
         sidebarBackdrop: document.getElementById('sidebarBackdrop'),
@@ -1824,6 +1843,10 @@ Identity Directive:
         // Fetch backend server status & .env keys
         await fetchBackendConfig();
 
+        // Check MongoDB database connection & sync cloud state
+        await checkDatabaseStatus();
+        await syncStateWithMongoDB(currentUser);
+
         // Apply theme & font to HTML root
         const activeTheme = state.currentTheme || 'dark';
         document.documentElement.setAttribute('data-theme', activeTheme);
@@ -1934,6 +1957,199 @@ Identity Directive:
         }
     }
 
+    // ==========================================
+    // MONGODB PERSISTENT STORAGE SYNC ENGINE
+    // ==========================================
+    let syncMongoTimeout = null;
+
+    async function checkDatabaseStatus() {
+        try {
+            const res = await fetch('/api/db/status');
+            if (res.ok) {
+                const data = await res.json();
+                state.db = {
+                    isConnected: !!data.isConnected,
+                    mode: data.mode || (data.isConnected ? 'mongodb' : 'local_fallback'),
+                    host: data.host,
+                    name: data.name,
+                    stats: data.stats || { users: 0, sessions: 0, decks: 0 }
+                };
+                renderDbStatusIndicator();
+                return data;
+            }
+        } catch (e) {
+            state.db = { isConnected: false, mode: 'local_fallback', stats: { users: 0, sessions: 0, decks: 0 } };
+        }
+        renderDbStatusIndicator();
+        return { isConnected: false, mode: 'local_fallback' };
+    }
+
+    function renderDbStatusIndicator() {
+        const isConnected = state.db && state.db.isConnected;
+
+        // Header pill
+        if (elements.dbStatusPill) {
+            if (isConnected) {
+                elements.dbStatusPill.classList.remove('local-mode');
+                elements.dbStatusPill.setAttribute('title', `Database: MongoDB Persistent Storage Active (${state.db.name || 'shiviai_db'})`);
+                if (elements.dbStatusDot) elements.dbStatusDot.classList.remove('local-mode');
+                if (elements.dbStatusText) elements.dbStatusText.textContent = 'MongoDB';
+            } else {
+                elements.dbStatusPill.classList.add('local-mode');
+                elements.dbStatusPill.setAttribute('title', 'Database: Operating in Local Fallback Mode (offline)');
+                if (elements.dbStatusDot) elements.dbStatusDot.classList.add('local-mode');
+                if (elements.dbStatusText) elements.dbStatusText.textContent = 'Local Mode';
+            }
+        }
+
+        // Brain Hub pane-storage elements
+        if (elements.mongoStatusTag) {
+            if (isConnected) {
+                elements.mongoStatusTag.classList.remove('fallback');
+                if (elements.mongoTagText) elements.mongoTagText.textContent = 'MongoDB Connected';
+                if (elements.mongoCardDot) elements.mongoCardDot.classList.remove('local-mode');
+            } else {
+                elements.mongoStatusTag.classList.add('fallback');
+                if (elements.mongoTagText) elements.mongoTagText.textContent = 'Local Fallback Mode';
+                if (elements.mongoCardDot) elements.mongoCardDot.classList.add('local-mode');
+            }
+        }
+
+        if (elements.mongoUserCount && state.db && state.db.stats) {
+            elements.mongoUserCount.textContent = state.db.stats.users || 0;
+        }
+        if (elements.mongoSessionCount && state.db && state.db.stats) {
+            elements.mongoSessionCount.textContent = state.db.stats.sessions || 0;
+        }
+        if (elements.mongoDeckCount && state.db && state.db.stats) {
+            elements.mongoDeckCount.textContent = state.db.stats.decks || 0;
+        }
+    }
+
+    async function syncStateWithMongoDB(currentUser) {
+        const token = (state.auth && state.auth.token) || localStorage.getItem('auth_token') || localStorage.getItem('shivi_auth_token');
+        if (!token) return;
+
+        try {
+            // 1. Fetch remote user settings from MongoDB
+            const settingsRes = await fetch('/api/user/settings', {
+                headers: { 'Authorization': 'Bearer ' + token }
+            });
+            if (settingsRes.ok) {
+                const sData = await settingsRes.json();
+                if (sData.success && sData.settings && Object.keys(sData.settings).length > 0) {
+                    const rs = sData.settings;
+                    if (rs.theme && !localStorage.getItem('shivi_selected_theme')) state.currentTheme = rs.theme;
+                    if (rs.font) state.currentFont = rs.font;
+                    if (rs.persona) state.currentPersona = rs.persona;
+                    if (rs.voiceEnabled !== undefined && window.voiceService) {
+                        state.voiceEnabled = rs.voiceEnabled;
+                        window.voiceService.isVoiceEnabled = rs.voiceEnabled;
+                    }
+                }
+            }
+
+            // 2. Fetch remote chat sessions from MongoDB
+            const chatsRes = await fetch('/api/chats', {
+                headers: { 'Authorization': 'Bearer ' + token }
+            });
+            if (chatsRes.ok) {
+                const cData = await chatsRes.json();
+                if (cData.success && cData.mode === 'mongodb' && Array.isArray(cData.sessions)) {
+                    if (cData.sessions.length > 0) {
+                        const remoteMap = new Map(cData.sessions.map(s => [s.id, s]));
+                        const localUnsynced = state.sessions.filter(s => !remoteMap.has(s.id));
+                        if (localUnsynced.length > 0) {
+                            await fetch('/api/chats/sync', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                                body: JSON.stringify({ sessions: localUnsynced })
+                            });
+                        }
+                        state.sessions = cData.sessions;
+                        if (!state.currentSessionId || !remoteMap.has(state.currentSessionId)) {
+                            state.currentSessionId = state.sessions[0].id;
+                        }
+                    } else if (state.sessions.length > 0) {
+                        const syncRes = await fetch('/api/chats/sync', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                            body: JSON.stringify({ sessions: state.sessions })
+                        });
+                        const syncData = await syncRes.json();
+                        if (syncData.success && syncData.mode === 'mongodb') {
+                            showToast(`✓ Migrated ${state.sessions.length} chats to MongoDB!`, 'database');
+                        }
+                    }
+                    renderHistoryList();
+                    renderCurrentChat();
+                }
+            }
+        } catch (err) {
+            console.warn('[MongoDB Sync] Notice during initial state sync:', err.message);
+        }
+    }
+
+    function debouncedSyncToMongo() {
+        if (syncMongoTimeout) clearTimeout(syncMongoTimeout);
+        syncMongoTimeout = setTimeout(async () => {
+            const token = (state.auth && state.auth.token) || localStorage.getItem('auth_token') || localStorage.getItem('shivi_auth_token');
+            if (!token || !state.db || !state.db.isConnected) return;
+
+            try {
+                // Sync settings
+                fetch('/api/user/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                    body: JSON.stringify({
+                        theme: state.currentTheme,
+                        font: state.currentFont,
+                        persona: state.currentPersona,
+                        voiceEnabled: state.voiceEnabled,
+                        brainProvider: state.brainProvider,
+                        imageProvider: state.imageProvider
+                    })
+                }).catch(() => {});
+
+                // Sync current active session
+                const curr = getCurrentSession();
+                if (curr) {
+                    fetch('/api/chats', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                        body: JSON.stringify(curr)
+                    }).catch(() => {});
+                }
+            } catch (e) {}
+        }, 500);
+    }
+
+    async function syncAllLocalChatsToMongoDB() {
+        const token = (state.auth && state.auth.token) || localStorage.getItem('auth_token') || localStorage.getItem('shivi_auth_token');
+        if (!token) {
+            showToast('Please sign in to sync with MongoDB database', 'alert-circle');
+            return;
+        }
+        try {
+            showToast('Syncing all local data to MongoDB...', 'loader');
+            const res = await fetch('/api/chats/sync', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                body: JSON.stringify({ sessions: state.sessions })
+            });
+            const data = await res.json();
+            if (data.success) {
+                showToast(`✓ ${data.message || 'Chats synced to MongoDB!'}`, 'check-circle');
+                playSound('receive');
+                await checkDatabaseStatus();
+            } else {
+                throw new Error(data.error || 'Failed to sync');
+            }
+        } catch (err) {
+            showToast(`Sync Notice: ${err.message}`, 'alert-triangle');
+        }
+    }
+
     async function fetchDefaultKnowledgeFile() {
         try {
             const res = await fetch('./knowledge.json');
@@ -1984,6 +2200,7 @@ Identity Directive:
                 localStorage.setItem('color-mode', state.currentTheme);
             }
             updateBrainUIBadges();
+            debouncedSyncToMongo();
         } catch (e) {
             console.error('Error saving state:', e);
         }
@@ -2005,6 +2222,18 @@ Identity Directive:
         saveState();
         renderHistoryList();
         renderCurrentChat();
+
+        // Persist session to MongoDB backend asynchronously
+        if (state.db && state.db.isConnected) {
+            const token = (state.auth && state.auth.token) || localStorage.getItem('auth_token') || localStorage.getItem('shivi_auth_token');
+            if (token) {
+                fetch('/api/chats', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                    body: JSON.stringify(newSession)
+                }).catch(() => {});
+            }
+        }
         return newSession;
     }
 
@@ -3227,6 +3456,18 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
         saveState();
         renderHistoryList();
         renderCurrentChat();
+
+        // Also delete from MongoDB backend if connected
+        if (state.db && state.db.isConnected) {
+            const token = (state.auth && state.auth.token) || localStorage.getItem('auth_token') || localStorage.getItem('shivi_auth_token');
+            if (token) {
+                fetch('/api/chats/' + encodeURIComponent(id), {
+                    method: 'DELETE',
+                    headers: { 'Authorization': 'Bearer ' + token }
+                }).catch(() => {});
+            }
+        }
+
         showToast('Chat deleted', 'trash-2');
     }
 
@@ -7661,6 +7902,32 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
     // EVENT LISTENERS INITIALIZATION
     // ==========================================
     function initEventListeners() {
+        // MongoDB Status Pill Click (Opens Brain Hub -> Storage Tab)
+        if (elements.dbStatusPill) {
+            elements.dbStatusPill.addEventListener('click', () => {
+                if (typeof openBrainModal === 'function') {
+                    openBrainModal();
+                    const storageTabBtn = document.querySelector('.brain-tab-btn[data-tab="storage"]');
+                    if (storageTabBtn) storageTabBtn.click();
+                }
+            });
+        }
+
+        // MongoDB Sync Button in Brain Hub Storage Tab
+        if (elements.btnSyncMongoData) {
+            elements.btnSyncMongoData.addEventListener('click', () => {
+                syncAllLocalChatsToMongoDB();
+            });
+        }
+
+        // MongoDB Refresh DB Health Button in Brain Hub Storage Tab
+        if (elements.btnRefreshMongoHealth) {
+            elements.btnRefreshMongoHealth.addEventListener('click', async () => {
+                const health = await checkDatabaseStatus();
+                showToast(`MongoDB: ${health.isConnected ? 'Connected & Healthy' : 'Offline (Local Fallback)'}`, health.isConnected ? 'check-circle' : 'alert-triangle');
+            });
+        }
+
         // Form Submit
         if (elements.chatForm) {
             elements.chatForm.addEventListener('submit', (e) => {
