@@ -95,10 +95,12 @@ export default function ThemeModal({
     document.documentElement.classList.add('dark', 'theme-dark');
     document.documentElement.classList.remove('theme-light');
 
-    // 2. Persist in storage
-    localStorage.setItem('shivi_selected_theme', themeId);
-    localStorage.setItem('shivi_theme', themeId);
-    localStorage.setItem('theme', themeId);
+    // 2. Persist strictly in MongoDB via backend API (Zero client-side localStorage)
+    fetch('/api/users/preferences', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ themePreference: themeId })
+    }).catch(() => {});
 
     // 3. Update React state
     if (typeof setActiveTheme === 'function') {

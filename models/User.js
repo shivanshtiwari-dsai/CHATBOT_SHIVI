@@ -68,6 +68,14 @@ const UserSchema = new mongoose.Schema({
         enum: ['free', 'pro', 'enterprise', 'creator'],
         default: 'free'
     },
+    themePreference: {
+        type: String,
+        default: 'cyberpunk'
+    },
+    voiceEnabled: {
+        type: Boolean,
+        default: true
+    },
     settings: {
         type: UserSettingsSchema,
         default: () => ({})
@@ -87,6 +95,8 @@ UserSchema.methods.toSafeJSON = function () {
     delete obj.passwordHash;
     delete obj.salt;
     delete obj.__v;
+    obj.themePreference = obj.themePreference || (obj.settings && obj.settings.theme) || 'cyberpunk';
+    obj.voiceEnabled = (obj.voiceEnabled !== undefined) ? obj.voiceEnabled : ((obj.settings && obj.settings.voiceEnabled !== undefined) ? obj.settings.voiceEnabled : true);
     return obj;
 };
 

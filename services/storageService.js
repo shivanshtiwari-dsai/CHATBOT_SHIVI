@@ -9,7 +9,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { isMongoConnected, getConnectionStatus } = require('../config/db.js');
+const { isMongoConnected, getConnectionStatus, mongoose } = require('../config/db.js');
 const { User, ChatSession, ChatMessage, PptDeck } = require('../models/index.js');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
@@ -79,6 +79,30 @@ async function seedLocalUsersToMongo() {
         }
     } catch (err) {
         console.warn('[Storage] Notice during initial users sync to MongoDB:', err.message);
+    }
+}
+
+async function migrateLegacyCollections() {
+    if (!isMongoConnected() || !mongoose.connection || !mongoose.connection.db) return;
+    try {
+        const collections = await mongoose.connection.db.listCollections().toArray();
+        const colNames = collections.map(c => c.name);
+        if (colNames.includes('chat_sessions')) {
+            const legacyDocs = await mongoose.connection.db.collection('chat_sessions').find({}).toArray();
+            if (legacyDocs.length > 0) {
+                for (const doc of legacyDocs) {
+                    const exists = await ChatSession.findOne({ id: doc.id });
+                    if (!exists) {
+                        const copy = Object.assign({}, doc);
+                        delete copy._id;
+                        await ChatSession.create(copy);
+                    }
+                }
+                console.log(`[Storage] Migrated ${legacyDocs.length} legacy chat_sessions to MongoDB conversations collection.`);
+            }
+        }
+    } catch (e) {
+        console.warn('[Storage] Notice during collection migration:', e.message);
     }
 }
 
@@ -212,6 +236,81 @@ async function updateUserSettings(idOrEmail, newSettings) {
     return true;
 }
 
+async function syncUserProfile(userData) {
+    if (!userData || (!userData.email && !userData.id)) return null;
+    const cleanEmail = (userData.email || '').trim().toLowerCase();
+
+    let user = cleanEmail ? await findUserByEmail(cleanEmail) : await findUserById(userData.id);
+    if (!user) {
+        user = await createUser({
+            name: userData.name || 'Explorer',
+            email: cleanEmail || `user_${Date.now()}@shiviai.demo`,
+            provider: userData.provider || 'email',
+            avatar: userData.avatar || (userData.name ? userData.name.slice(0, 2).toUpperCase() : 'U'),
+            themePreference: userData.themePreference || 'cyberpunk',
+            voiceEnabled: userData.voiceEnabled !== undefined ? userData.voiceEnabled : true,
+            plan: userData.plan || 'free',
+            settings: {
+                theme: userData.themePreference || 'cyberpunk',
+                voiceEnabled: userData.voiceEnabled !== undefined ? userData.voiceEnabled : true
+            }
+        });
+    } else {
+        if (isMongoConnected()) {
+            try {
+                const updates = { lastLoginAt: new Date() };
+                if (userData.themePreference) {
+                    updates.themePreference = userData.themePreference;
+                    updates['settings.theme'] = userData.themePreference;
+                }
+                if (userData.voiceEnabled !== undefined) {
+                    updates.voiceEnabled = !!userData.voiceEnabled;
+                    updates['settings.voiceEnabled'] = !!userData.voiceEnabled;
+                }
+                const updated = await User.findOneAndUpdate(
+                    { email: user.email },
+                    { $set: updates },
+                    { returnDocument: 'after' }
+                );
+                if (updated) user = updated.toSafeJSON();
+            } catch (e) {
+                console.warn('[Storage] syncUserProfile touch notice:', e.message);
+            }
+        }
+    }
+    return user;
+}
+
+async function updateUserPreferences(idOrEmail, preferences) {
+    if (!idOrEmail || !preferences) return null;
+    const cleanKey = String(idOrEmail).trim();
+    const query = cleanKey.includes('@') ? { email: cleanKey.toLowerCase() } : { $or: [{ id: cleanKey }, { email: cleanKey.toLowerCase() }] };
+    const updates = {};
+
+    const chosenTheme = preferences.themePreference || preferences.theme;
+    if (chosenTheme) {
+        updates.themePreference = chosenTheme;
+        updates['settings.theme'] = chosenTheme;
+    }
+    if (preferences.voiceEnabled !== undefined) {
+        updates.voiceEnabled = !!preferences.voiceEnabled;
+        updates['settings.voiceEnabled'] = !!preferences.voiceEnabled;
+    }
+    if (preferences.font) updates['settings.font'] = preferences.font;
+    if (preferences.persona) updates['settings.persona'] = preferences.persona;
+
+    if (isMongoConnected()) {
+        try {
+            const updated = await User.findOneAndUpdate(query, { $set: updates }, { returnDocument: 'after' });
+            if (updated) return updated.toSafeJSON();
+        } catch (err) {
+            console.error('[Storage] MongoDB updateUserPreferences error:', err.message);
+        }
+    }
+
+    return null;
+}
+
 // ----------------------------------------------------
 // CHAT SESSION & CONVERSATION REPOSITORY
 // ----------------------------------------------------
@@ -219,35 +318,43 @@ async function getUserSessions(userId, userEmail = '') {
     if (isMongoConnected()) {
         try {
             const orQuery = [];
-            if (userId) orQuery.push({ userId: userId });
-            if (userEmail) orQuery.push({ userEmail: userEmail.toLowerCase() });
+            const cleanEmail = (userEmail || (userId && userId.includes('@') ? userId : '')).trim().toLowerCase();
+            const cleanId = userId && !userId.includes('@') ? userId : '';
+
+            if (cleanEmail) orQuery.push({ userEmail: cleanEmail });
+            if (cleanId && cleanId !== 'guest') orQuery.push({ userId: cleanId });
             if (orQuery.length === 0) orQuery.push({ userId: 'guest' });
 
             const sessions = await ChatSession.find({ $or: orQuery }).sort({ updatedAt: -1 }).lean();
+            const mapped = sessions.map(s => ({
+                id: s.id,
+                title: s.title,
+                currentPersona: s.currentPersona || 'companion',
+                pinned: !!s.pinned,
+                createdAt: s.createdAt,
+                updatedAt: s.updatedAt,
+                messageCount: s.messages ? s.messages.length : 0,
+                messages: s.messages || []
+            }));
+
             return {
                 success: true,
                 mode: 'mongodb',
-                sessions: sessions.map(s => ({
-                    id: s.id,
-                    title: s.title,
-                    currentPersona: s.currentPersona || 'companion',
-                    pinned: !!s.pinned,
-                    createdAt: s.createdAt,
-                    updatedAt: s.updatedAt,
-                    messageCount: s.messages ? s.messages.length : 0,
-                    messages: s.messages || []
-                }))
+                conversations: mapped,
+                recentChats: mapped,
+                sessions: mapped
             };
         } catch (err) {
-            console.error('[Storage] MongoDB getUserSessions error, fallback to client localStorage:', err.message);
+            console.error('[Storage] MongoDB getUserSessions error:', err.message);
         }
     }
 
     return {
         success: true,
-        mode: 'local_fallback',
-        sessions: [],
-        message: 'MongoDB offline; client localStorage cache utilized.'
+        mode: 'mongodb',
+        conversations: [],
+        recentChats: [],
+        sessions: []
     };
 }
 
@@ -342,6 +449,20 @@ async function appendMessageToSession(sessionId, message, userId = 'guest', user
                 },
                 { upsert: true, returnDocument: 'after' }
             );
+
+            if (formattedMsg.isPresentation || message.deck || message.deckData) {
+                try {
+                    const deckInfo = message.deck || message.deckData || {
+                        title: message.filename || 'Presentation',
+                        topic: message.prompt || 'Presentation',
+                        filename: message.filename || `presentation_${Date.now()}.pptx`,
+                        downloadUrl: message.downloadUrl || ''
+                    };
+                    await savePptDeck(deckInfo, userId, userEmail, sessionId);
+                } catch (deckErr) {
+                    console.warn('[Storage] Auto-saving PPT deck notice:', deckErr.message);
+                }
+            }
 
             return {
                 success: true,
@@ -566,6 +687,8 @@ module.exports = {
     createUser,
     updateUser,
     updateUserSettings,
+    syncUserProfile,
+    updateUserPreferences,
     getUserSessions,
     getSessionById,
     saveOrUpdateSession,
@@ -576,5 +699,6 @@ module.exports = {
     getUserDecks,
     deletePptDeck,
     getDatabaseHealth,
-    seedLocalUsersToMongo
+    seedLocalUsersToMongo,
+    migrateLegacyCollections
 };

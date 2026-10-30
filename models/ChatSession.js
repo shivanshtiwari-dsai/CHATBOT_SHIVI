@@ -48,7 +48,7 @@ const ChatSessionSchema = new mongoose.Schema({
     }
 }, {
     timestamps: true,
-    collection: 'chat_sessions'
+    collection: 'conversations'
 });
 
 // Update message count and updatedAt before saving

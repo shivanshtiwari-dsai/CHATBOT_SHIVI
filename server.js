@@ -2251,6 +2251,82 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ----------------------------------------------------
+    // API: PURE MONGODB USER SYNC (POST /api/users/sync)
+    // ----------------------------------------------------
+    if (req.method === 'POST' && pathname === '/api/users/sync') {
+        try {
+            const body = await parseJsonBody(req);
+            const authUser = getAuthenticatedUser(req);
+            const email = (body.email || (authUser ? authUser.email : '')).trim().toLowerCase();
+            const name = (body.name || (authUser ? authUser.name : '')).trim() || 'Explorer';
+            const provider = body.provider || (authUser ? authUser.provider : 'email');
+            const avatar = body.avatar || (name ? name.slice(0, 2).toUpperCase() : 'U');
+
+            if (!email) {
+                return sendJson(res, 400, { success: false, error: 'User email is required to sync profile with MongoDB.' });
+            }
+
+            const user = await storage.syncUserProfile({
+                email,
+                name,
+                provider,
+                avatar,
+                themePreference: body.themePreference || body.theme || 'cyberpunk',
+                voiceEnabled: body.voiceEnabled !== undefined ? body.voiceEnabled : true,
+                plan: body.plan || 'free'
+            });
+
+            const token = (authUser && req.headers['authorization'])
+                ? req.headers['authorization'].replace(/^Bearer\s+/i, '')
+                : createAuthToken(user, 14);
+
+            return sendJson(res, 200, {
+                success: true,
+                mode: 'mongodb',
+                token: token,
+                user: user.toSafeJSON ? user.toSafeJSON() : user,
+                message: 'User profile synchronized strictly with MongoDB.'
+            });
+        } catch (err) {
+            console.error('[API Error /api/users/sync]:', err.message);
+            return sendJson(res, 500, { success: false, error: 'User sync failed: ' + err.message });
+        }
+    }
+
+    // ----------------------------------------------------
+    // API: USER PREFERENCES (PATCH & POST /api/users/preferences)
+    // ----------------------------------------------------
+    if ((req.method === 'PATCH' || req.method === 'POST') && (pathname === '/api/users/preferences' || pathname === '/api/user/preferences')) {
+        try {
+            const body = await parseJsonBody(req);
+            const authUser = getAuthenticatedUser(req);
+            const targetIdOrEmail = (authUser ? (authUser.email || authUser.sub) : (body.email || body.userId || '')).trim();
+
+            if (!targetIdOrEmail) {
+                return sendJson(res, 400, { success: false, error: 'User identification (email or token) is required to save preferences.' });
+            }
+
+            const updatedUser = await storage.updateUserPreferences(targetIdOrEmail, body);
+            const activeTheme = (updatedUser && (updatedUser.themePreference || (updatedUser.settings && updatedUser.settings.theme))) || body.themePreference || body.theme || 'cyberpunk';
+            const activeVoice = updatedUser ? updatedUser.voiceEnabled : (body.voiceEnabled !== undefined ? !!body.voiceEnabled : true);
+
+            return sendJson(res, 200, {
+                success: true,
+                mode: 'mongodb',
+                preferences: {
+                    themePreference: activeTheme,
+                    voiceEnabled: activeVoice
+                },
+                user: updatedUser,
+                message: 'Preferences saved strictly to MongoDB.'
+            });
+        } catch (err) {
+            console.error('[API Error /api/users/preferences]:', err.message);
+            return sendJson(res, 500, { success: false, error: 'Failed to update preferences: ' + err.message });
+        }
+    }
+
+    // ----------------------------------------------------
     // API: MONGODB & DATABASE STATUS (GET /api/db/status)
     // ----------------------------------------------------
     if (req.method === 'GET' && pathname === '/api/db/status') {
@@ -2316,8 +2392,36 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ----------------------------------------------------
-    // API: CHAT SESSIONS & CONVERSATIONS
+    // API: CHAT SESSIONS & CONVERSATIONS (PURE MONGODB)
     // ----------------------------------------------------
+    // Save Message Directly to MongoDB: POST /api/chats/message
+    if (req.method === 'POST' && pathname === '/api/chats/message') {
+        try {
+            const body = await parseJsonBody(req);
+            const authUser = getAuthenticatedUser(req);
+            const sessionId = body.sessionId || body.conversationId || (body.message && (body.message.sessionId || body.message.conversationId));
+            const userId = authUser ? authUser.sub : (body.userId || 'guest');
+            const userEmail = authUser ? authUser.email : (body.userEmail || '');
+            const message = body.message || body;
+
+            if (!sessionId) {
+                return sendJson(res, 400, { success: false, error: 'sessionId or conversationId is required.' });
+            }
+
+            const result = await storage.appendMessageToSession(sessionId, message, userId, userEmail);
+            return sendJson(res, 200, {
+                success: true,
+                mode: 'mongodb',
+                conversationId: sessionId,
+                sessionId: sessionId,
+                ...result
+            });
+        } catch (err) {
+            console.error('[API Error /api/chats/message]:', err.message);
+            return sendJson(res, 500, { success: false, error: err.message });
+        }
+    }
+
     // Append message to session: POST /api/chats/:id/messages
     const msgMatch = pathname.match(/^\/api\/chats\/([^/]+)\/messages$/);
     if (req.method === 'POST' && msgMatch) {
@@ -2330,6 +2434,27 @@ const server = http.createServer(async (req, res) => {
 
             const result = await storage.appendMessageToSession(sessionId, body.message || body, userId, userEmail);
             return sendJson(res, 200, result);
+        } catch (err) {
+            return sendJson(res, 500, { success: false, error: err.message });
+        }
+    }
+
+    // Fetch conversation thread: GET /api/chats/conversation/:id
+    const convMatch = pathname.match(/^\/api\/chats\/conversation\/([^/]+)$/);
+    if (convMatch && req.method === 'GET') {
+        try {
+            const convId = decodeURIComponent(convMatch[1]);
+            const session = await storage.getSessionById(convId);
+            if (!session) {
+                return sendJson(res, 404, { success: false, error: 'Conversation not found in MongoDB.' });
+            }
+            return sendJson(res, 200, {
+                success: true,
+                mode: 'mongodb',
+                conversation: session,
+                session: session,
+                messages: session.messages || []
+            });
         } catch (err) {
             return sendJson(res, 500, { success: false, error: err.message });
         }
@@ -2367,17 +2492,33 @@ const server = http.createServer(async (req, res) => {
         }
     }
 
-    // Single session operations: /api/chats/:id
+    // Single session or User Chats: /api/chats/:id or /api/chats/:email
     const chatMatch = pathname.match(/^\/api\/chats\/([^/]+)$/);
     if (chatMatch) {
-        const sessionId = decodeURIComponent(chatMatch[1]);
+        const param = decodeURIComponent(chatMatch[1]);
         if (req.method === 'GET') {
             try {
-                const session = await storage.getSessionById(sessionId);
-                if (!session) {
-                    return sendJson(res, 404, { success: false, error: 'Session not found.' });
+                // If the parameter is an email address (GET /api/chats/:email)
+                if (param.includes('@') || param.startsWith('guest_') || param.startsWith('direct_') || param.startsWith('usr_')) {
+                    const result = await storage.getUserSessions(param, param.includes('@') ? param : '');
+                    return sendJson(res, 200, result);
                 }
-                return sendJson(res, 200, { success: true, session });
+
+                // First check if it is a session ID
+                const session = await storage.getSessionById(param);
+                if (session) {
+                    return sendJson(res, 200, {
+                        success: true,
+                        mode: 'mongodb',
+                        conversation: session,
+                        session: session,
+                        messages: session.messages || []
+                    });
+                }
+
+                // Otherwise fallback to user sessions query
+                const userSessions = await storage.getUserSessions(param, '');
+                return sendJson(res, 200, userSessions);
             } catch (err) {
                 return sendJson(res, 500, { success: false, error: err.message });
             }
@@ -2389,7 +2530,7 @@ const server = http.createServer(async (req, res) => {
                 const userId = authUser ? authUser.sub : (body.userId || 'guest');
                 const userEmail = authUser ? authUser.email : (body.userEmail || '');
 
-                const updateData = Object.assign({}, body, { id: sessionId });
+                const updateData = Object.assign({}, body, { id: param });
                 const result = await storage.saveOrUpdateSession(updateData, userId, userEmail);
                 return sendJson(res, 200, result);
             } catch (err) {
@@ -2400,7 +2541,7 @@ const server = http.createServer(async (req, res) => {
             try {
                 const authUser = getAuthenticatedUser(req);
                 const userId = authUser ? authUser.sub : null;
-                const result = await storage.deleteUserSession(sessionId, userId);
+                const result = await storage.deleteUserSession(param, userId);
                 return sendJson(res, 200, result);
             } catch (err) {
                 return sendJson(res, 500, { success: false, error: err.message });
@@ -3138,6 +3279,9 @@ server.listen(PORT, '0.0.0.0', () => {
     connectDB().then(() => {
         storage.seedLocalUsersToMongo().catch(err => {
             console.warn('[MongoDB] Initial migration notice:', err.message);
+        });
+        storage.migrateLegacyCollections().catch(err => {
+            console.warn('[MongoDB] Legacy collection migration notice:', err.message);
         });
     }).catch(err => {
         console.warn('[MongoDB] Startup connection notice:', err.message);
