@@ -138,7 +138,7 @@ Core Capabilities & Guidelines:
     // ==========================================
     // DYNAMIC NATURAL REASONING & NLP LOGIC
     // ==========================================
-    function generateLogicalAnswer(query, persona = 'companion', knowledgeContext = '') {
+    function generateLogicalAnswer(query, persona = 'companion', knowledgeContext = '', webContext = '') {
         const text = query.trim();
         const lower = text.toLowerCase();
 
@@ -166,6 +166,15 @@ Core Capabilities & Guidelines:
         // 2. Knowledge memory context integration
         if (knowledgeContext && (/what|how|explain|who|tell|recall|brain|memory|knowledge|api|storage|shivi/i.test(lower))) {
             return `${prefix}### 🧠 Retrieved from Shivi Brain Memory\n\nHere is the verified information from your knowledge records:\n\n${knowledgeContext}\n\n*Would you like to modify, add, or query other records in my Brain?*`;
+        }
+
+        // 2b. Live Real-Time Web Context integration
+        if (webContext && webContext.includes('[REAL-TIME LIVE WEB BROWSING RESULTS')) {
+            const rawSnippets = webContext
+                .replace(/\[REAL-TIME LIVE WEB BROWSING RESULTS[\s\S]*?Fetched at ([^\]]+)\]:/i, '**Live Web Intelligence as of $1**:\n')
+                .replace(/\[MANDATORY INSTRUCTION\][\s\S]*/i, '')
+                .trim();
+            return `${prefix}### 🌐 Real-Time Web Intelligence\n\n${rawSnippets}\n\n*Aggregated in real-time across Google News, DuckDuckGo, and Wikipedia.*`;
         }
 
         // 3. Greeting & Identity
@@ -564,7 +573,8 @@ Here is a structured explanation answering **${escapeHtml(text)}**:
                 persona = 'companion',
                 systemPrompt = '',
                 history = [],
-                knowledgeContext = ''
+                knowledgeContext = '',
+                webContext = ''
             } = params;
 
             if (!message || !message.trim()) {
@@ -584,7 +594,7 @@ Here is a structured explanation answering **${escapeHtml(text)}**:
                 };
             }
 
-            const fullSystemPrompt = `${this.systemPrompt}\nPersona Mode: ${persona}\n${systemPrompt ? `Custom Rules: ${systemPrompt}` : ''}\n${knowledgeContext ? `\n[VERIFIED BRAIN KNOWLEDGE]:\n${knowledgeContext}` : ''}`;
+            const fullSystemPrompt = `${this.systemPrompt}\nPersona Mode: ${persona}\n${systemPrompt ? `Custom Rules: ${systemPrompt}` : ''}\n${knowledgeContext ? `\n[VERIFIED BRAIN KNOWLEDGE]:\n${knowledgeContext}` : ''}${webContext ? `\n\n${webContext}` : ''}`;
 
             // If a Gemini API Key is provided, use Google Gemini
             if ((provider === 'gemini' || !provider) && apiKey) {
@@ -605,18 +615,19 @@ Here is a structured explanation answering **${escapeHtml(text)}**:
 
             // If a Groq API Key is provided, use Groq
             if (provider === 'groq' && apiKey) {
-                const reply = await callGroqApi(apiKey, model || 'llama-3.3-70b-versatile', fullSystemPrompt, cleanMsg, history);
+                const targetModel = (model && model !== 'llama-3.3-70b-versatile') ? model : 'openai/gpt-oss-20b';
+                const reply = await callGroqApi(apiKey, targetModel, fullSystemPrompt, cleanMsg, history);
                 return {
                     success: true,
                     reply: reply,
                     provider: 'groq',
-                    model: model || 'llama-3.3-70b-versatile',
+                    model: targetModel,
                     timestamp: new Date().toISOString()
                 };
             }
 
             // Fallback to Built-in Reasoning & Logic Engine
-            const reply = generateLogicalAnswer(cleanMsg, persona, knowledgeContext);
+            const reply = generateLogicalAnswer(cleanMsg, persona, knowledgeContext, webContext);
             return {
                 success: true,
                 reply: reply,
@@ -637,7 +648,7 @@ Here is a structured explanation answering **${escapeHtml(text)}**:
             }
             if (provider === 'groq') {
                 const startTime = Date.now();
-                await callGroqApi(apiKey, model || 'llama-3.3-70b-versatile', 'You are a test ping responder.', 'Reply only: OK', []);
+                await callGroqApi(apiKey, model || 'openai/gpt-oss-20b', 'You are a test ping responder.', 'Reply only: OK', []);
                 return { success: true, latency: Date.now() - startTime };
             }
             throw new Error(`Provider ${provider} not supported for testing.`);

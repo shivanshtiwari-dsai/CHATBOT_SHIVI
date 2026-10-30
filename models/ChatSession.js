@@ -52,11 +52,10 @@ const ChatSessionSchema = new mongoose.Schema({
 });
 
 // Update message count and updatedAt before saving
-ChatSessionSchema.pre('save', function (next) {
+ChatSessionSchema.pre('save', function () {
     if (this.messages) {
         this.messageCount = this.messages.length;
     }
-    next();
 });
 
 // Compound indexes for rapid user session listing & sorting

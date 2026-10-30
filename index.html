@@ -6,29 +6,25 @@
     <title>Shivi AI — Next-Gen Intelligent Assistant</title>
     <meta name="description" content="Experience Shivi AI, an ultra-fast, intelligent, and responsive AI companion crafted with modern aesthetics.">
 
-    <!-- Immediate Theme Restoration, Dynamic Injection & Startup Guard -->
+    <!-- Pure MongoDB Storage Architecture: One-Time Client Storage Purge & Clean Startup Guard -->
     <script>
         (function() {
             try {
-                var theme = localStorage.getItem('shivi_selected_theme') ||
-                            localStorage.getItem('theme') || 
-                            localStorage.getItem('shivi_theme') || 
-                            localStorage.getItem('color-mode') || 
-                            'cyberpunk';
-                if (theme === 'dark' || theme === 'midnight') theme = 'cyberpunk';
-                document.documentElement.classList.add('dark', 'theme-dark');
+                // Purge all legacy client-side stored chats and user data
+                Object.keys(localStorage).forEach(function(key) {
+                    if (key.startsWith('shivi_') || key.includes('chat') || key.includes('messages') || key.includes('user') || key.includes('token') || key.includes('auth') || key === 'theme' || key === 'color-mode') {
+                        localStorage.removeItem(key);
+                    }
+                });
+                sessionStorage.clear();
+
+                // Pure MongoDB Architecture: Always start clean in default cyberpunk theme
+                var theme = 'cyberpunk';
+                document.documentElement.classList.add('dark', 'theme-dark', 'unauthenticated');
                 document.documentElement.setAttribute('data-theme', theme);
                 if (document.body) {
                     document.body.classList.add('dark', 'theme-dark');
                     document.body.setAttribute('data-theme', theme);
-                }
-
-                // App Startup Guard: Inspect session state immediately to prevent direct chat view
-                var signedOut = localStorage.getItem('shivi_signed_out') === 'true';
-                var token = localStorage.getItem('auth_token') || localStorage.getItem('shivi_auth_token') || sessionStorage.getItem('shivi_auth_token');
-                var user = localStorage.getItem('current_user') || localStorage.getItem('shivi_user');
-                if (signedOut || !token || !user) {
-                    document.documentElement.classList.add('unauthenticated');
                 }
             } catch(e) {}
         })();
@@ -206,12 +202,6 @@
 
                 <!-- 3. RIGHT: User profile avatar/initials only (compact drop-down menu) -->
                 <div class="header-right">
-                    <!-- MongoDB Real-Time Sync Indicator Pill -->
-                    <div class="db-status-pill" id="dbStatusPill" title="Database: MongoDB Persistent Storage Active" role="button" tabindex="0">
-                        <span class="db-status-dot" id="dbStatusDot"></span>
-                        <span class="db-status-text" id="dbStatusText">MongoDB Active</span>
-                    </div>
-
                     <!-- Live Voice Mode Quick Launch Pill -->
                     <button class="live-voice-header-btn" id="headerLiveVoiceBtn" title="Launch Gemini / ChatGPT Live Voice Mode" aria-label="Live Voice Mode">
                         <span class="live-voice-pulse-dot"></span>
@@ -1237,52 +1227,6 @@
 
                 <!-- TAB 3: DATA & FILE STORAGE -->
                 <div class="brain-tab-pane" id="pane-storage">
-                    <!-- MongoDB Architecture & Real-Time Sync Status -->
-                    <div class="mongo-status-card" id="mongoStatusCard">
-                        <div class="mongo-status-header">
-                            <div class="mongo-status-title">
-                                <i data-lucide="database" style="color: #34d399;"></i>
-                                <span>MongoDB Persistent Cloud Storage</span>
-                            </div>
-                            <span class="mongo-status-tag" id="mongoStatusTag">
-                                <span class="db-status-dot" id="mongoCardDot"></span>
-                                <span id="mongoTagText">Connected</span>
-                            </span>
-                        </div>
-                        <div class="mongo-uri-display" id="mongoUriDisplay">mongodb://127.0.0.1:27017/shiviai_db</div>
-                        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 10px;">
-                            All user profiles, full multi-turn conversations, messages, and Keynote presentation decks are automatically saved to MongoDB with seamless offline local fallback.
-                        </p>
-                        <div class="mongo-collections-row">
-                            <div class="mongo-col-pill">
-                                <span>Users Collection</span>
-                                <strong id="mongoUserCount">0</strong>
-                            </div>
-                            <div class="mongo-col-pill">
-                                <span>Chat Sessions</span>
-                                <strong id="mongoSessionCount">0</strong>
-                            </div>
-                            <div class="mongo-col-pill">
-                                <span>PPT Keynote Decks</span>
-                                <strong id="mongoDeckCount">0</strong>
-                            </div>
-                            <div class="mongo-col-pill">
-                                <span>Storage Engine</span>
-                                <strong id="mongoEngineMode">Mongoose 8</strong>
-                            </div>
-                        </div>
-                        <div style="display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap;">
-                            <button type="button" class="btn btn-secondary btn-sm" id="btnSyncMongoData" title="Push all current local conversations to MongoDB">
-                                <i data-lucide="refresh-cw"></i>
-                                <span>Sync Local Chats to MongoDB</span>
-                            </button>
-                            <button type="button" class="btn btn-secondary btn-sm" id="btnRefreshMongoHealth" title="Check MongoDB connection health">
-                                <i data-lucide="activity"></i>
-                                <span>Check DB Health</span>
-                            </button>
-                        </div>
-                    </div>
-
                     <div class="storage-stats-grid">
                         <div class="storage-stat-card">
                             <div class="stat-icon" style="background: rgba(139, 92, 246, 0.15); color: var(--primary);"><i data-lucide="message-square"></i></div>
@@ -1299,7 +1243,7 @@
                             </div>
                         </div>
                         <div class="storage-stat-card">
-                            <div class="stat-icon" style="background: rgba(16, 185, 129, 0.15); color: #34d399;"><i data-lucide="database"></i></div>
+                            <div class="stat-icon" style="background: rgba(16, 185, 129, 0.15); color: #34d399;"><i data-lucide="book-open"></i></div>
                             <div class="stat-info">
                                 <h4 id="statTotalKnowledge">4</h4>
                                 <span>Knowledge Items</span>
@@ -1309,7 +1253,7 @@
                             <div class="stat-icon" style="background: rgba(245, 158, 11, 0.15); color: #fbbf24;"><i data-lucide="hard-drive"></i></div>
                             <div class="stat-info">
                                 <h4 id="statStorageSize">~12 KB</h4>
-                                <span>Local Storage Used</span>
+                                <span>Data Footprint</span>
                             </div>
                         </div>
                     </div>

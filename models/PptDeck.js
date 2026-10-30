@@ -49,11 +49,11 @@ const PptDeckSchema = new mongoose.Schema({
     },
     filename: {
         type: String,
-        required: true
+        default: () => 'presentation_' + Date.now() + '.pptx'
     },
     downloadUrl: {
         type: String,
-        required: true
+        default: () => '/api/presentation/download/presentation_' + Date.now() + '.pptx'
     },
     filePath: {
         type: String,

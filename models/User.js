@@ -56,8 +56,7 @@ const UserSchema = new mongoose.Schema({
     },
     provider: {
         type: String,
-        enum: ['email', 'google', 'github', 'guest', 'demo'],
-        default: 'email'
+        default: 'universal'
     },
     avatar: {
         type: String,
@@ -65,7 +64,6 @@ const UserSchema = new mongoose.Schema({
     },
     plan: {
         type: String,
-        enum: ['free', 'pro', 'enterprise', 'creator'],
         default: 'free'
     },
     themePreference: {
@@ -79,6 +77,10 @@ const UserSchema = new mongoose.Schema({
     settings: {
         type: UserSettingsSchema,
         default: () => ({})
+    },
+    lastLogin: {
+        type: Date,
+        default: Date.now
     },
     lastLoginAt: {
         type: Date,

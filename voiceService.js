@@ -115,11 +115,8 @@ class VoiceService {
         this.currentAudioUrl = null;
         this.activeTtsAbortController = null;
         
-        // Initial state synced with localStorage or default to enabled (true)
-        const storedVoice = typeof window !== 'undefined' && window.localStorage 
-            ? window.localStorage.getItem('shivi_voice_enabled') 
-            : null;
-        this.isVoiceEnabled = storedVoice !== null ? storedVoice === 'true' : true;
+        // Pure in-memory voice state initialized to enabled; synced strictly with MongoDB (Zero client-side localStorage)
+        this.isVoiceEnabled = true;
         
         this.isSpeaking = false;
         this.isListening = false;
@@ -628,9 +625,14 @@ class VoiceService {
         if (!this.isVoiceEnabled) {
             this.stop();
         }
-        if (typeof window !== 'undefined' && window.localStorage) {
-            window.localStorage.setItem('shivi_voice_enabled', this.isVoiceEnabled ? 'true' : 'false');
-        }
+        // Persist strictly to MongoDB via API (Zero client-side localStorage)
+        try {
+            fetch('/api/users/preferences', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ voiceEnabled: this.isVoiceEnabled })
+            }).catch(() => {});
+        } catch (e) {}
         this.notifyState();
         return this.isVoiceEnabled;
     }

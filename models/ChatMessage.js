@@ -14,8 +14,8 @@ const ChatMessageSchema = new mongoose.Schema({
     },
     sessionId: {
         type: String,
-        required: true,
-        index: true
+        index: true,
+        default: ''
     },
     userId: {
         type: String,
