@@ -3555,19 +3555,25 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
         );
 
         const safeIndex = parseInt(index, 10) || 1;
-        const seed = safeIndex * 137;
-        const prompt = encodeURIComponent(`${specificContext}, corporate tech, realistic, 8k`);
 
-        // Level 0: Fast Pollinations Turbo with staggered seed
-        const level0 = `https://image.pollinations.ai/prompt/${prompt}?width=800&height=500&nologo=true&model=turbo&seed=${seed}`;
+        // Level 0: Direct Contextual Unsplash HD Image (Zero Rate Limits, No Yellow Banners)
+        let level0 = '';
+        if (typeof getGuaranteedSlideImage === 'function') {
+            level0 = getGuaranteedSlideImage(slideObj, topic, safeIndex);
+        } else if (typeof window !== 'undefined' && typeof window.getGuaranteedSlideImage === 'function') {
+            level0 = window.getGuaranteedSlideImage(slideObj, topic, safeIndex);
+        }
+        if (!level0) {
+            level0 = `https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1200&q=85`;
+        }
 
-        // Level 1: High-res contextual Unsplash source based on slide keywords
-        const level1 = `https://source.unsplash.com/800x500/?${searchKeywords}`;
+        // Level 1: Secondary Unsplash HD Visual
+        const level1 = `https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=1200&q=85`;
 
-        // Level 2: Ultra-safe tech placeholder
-        const level2 = `https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=800&q=80`;
+        // Level 2: Ultra-safe high-aesthetic tech placeholder
+        const level2 = `https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?auto=format&fit=crop&w=1200&q=85`;
 
-        return { level0, level1, level2, prompt: specificContext, searchKeywords, seed };
+        return { level0, level1, level2, prompt: specificContext, searchKeywords, seed: safeIndex };
     }
 
     function buildContextualSlideImageUrl(slide, topic, index) {
@@ -4732,7 +4738,7 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                 const imgPrompt = currentSlide.image_prompt || currentSlide.visual_prompt || `${deckTitle} ${slideTitle}`;
                 const imgUrl = currentSlide.image_url || buildContextualSlideImageUrl(currentSlide, deckTitle, currentIdx + 1);
                 const seed = Math.abs(hashCode(`${deckTitle}_slide_${currentIdx + 1}`));
-                const fallbackUrl = currentSlide.fallback_image_url || `https://image.pollinations.ai/prompt/${encodeURIComponent(imgPrompt)}?width=900&height=550&nologo=true&seed=${seed}&model=turbo`;
+                const fallbackUrl = currentSlide.fallback_image_url || (typeof getGuaranteedSlideImage === 'function' ? getGuaranteedSlideImage(currentSlide, deckTitle, currentIdx + 1) : imgUrl);
                 const objectiveText = currentSlide.objective || `Deliver an authoritative strategic briefing on ${deckTitle}.`;
 
                 let bulletsList = [];
@@ -4803,7 +4809,7 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                 const imgPrompt = currentSlide.image_prompt || currentSlide.visual_prompt || `${deckTitle} ${slideTitle}`;
                 const imgUrl = currentSlide.image_url || buildContextualSlideImageUrl(currentSlide, deckTitle, currentIdx + 1);
                 const seed = Math.abs(hashCode(`${deckTitle}_slide_${currentIdx + 1}`));
-                const fallbackUrl = currentSlide.fallback_image_url || `https://image.pollinations.ai/prompt/${encodeURIComponent(imgPrompt)}?width=900&height=550&nologo=true&seed=${seed}&model=turbo`;
+                const fallbackUrl = currentSlide.fallback_image_url || (typeof getGuaranteedSlideImage === 'function' ? getGuaranteedSlideImage(currentSlide, deckTitle, currentIdx + 1) : imgUrl);
                 const objectiveText = currentSlide.objective || '';
 
                 let bulletsList = [];

@@ -103,14 +103,25 @@ function buildSlideVisualTiers(slide, topic, index = 1) {
   const safeIndex = parseInt(index, 10) || 1;
   const seed = safeIndex * 137;
 
-  // Level 0: Pollinations with turbo model and staggered seed (lightweight 800x500)
-  const level0 = `https://image.pollinations.ai/prompt/${prompt}?width=800&height=500&nologo=true&model=turbo&seed=${seed}`;
+  // Level 0: Direct Contextual Unsplash HD Image (Zero Rate Limits, No Branding)
+  let level0 = '';
+  if (typeof getGuaranteedSlideImage === 'function') {
+    level0 = getGuaranteedSlideImage(slideObj, topic, safeIndex);
+  } else if (typeof require !== 'undefined') {
+    try {
+      const { getGuaranteedSlideImage: gImg } = require('./services/slideImageEngine.js');
+      level0 = gImg(slideObj, topic, safeIndex);
+    } catch (_) {}
+  }
+  if (!level0) {
+    level0 = `https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1200&q=85`;
+  }
 
-  // Level 1: Contextual Unsplash source based on slide domain keywords
-  const level1 = `https://source.unsplash.com/800x500/?${searchKeywords}`;
+  // Level 1: Secondary Unsplash HD Visual
+  const level1 = `https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=1200&q=85`;
 
   // Level 2: Ultra-safe high-aesthetic tech placeholder
-  const level2 = `https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=800&q=80`;
+  const level2 = `https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?auto=format&fit=crop&w=1200&q=85`;
 
   return { level0, level1, level2, prompt: cleanPrompt, searchKeywords };
 }

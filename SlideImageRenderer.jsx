@@ -1,16 +1,15 @@
 import React, { useState, useEffect } from 'react';
+import { getGuaranteedSlideImage, fetchContextualSlidePhoto } from './services/slideImageEngine.js';
 
 /**
  * SlideImageRenderer
- * Multi-Tier Resilient Image Component for Presentation Studio
+ * Rate-Limit-Free Dual-Engine Real Photography Resolver for Presentation Studio
  * 
  * Features:
- * - Lazy-loads images on active slide only (eliminates bulk concurrent requests)
- * - Caches loaded image URLs in memory so navigating back does not re-fetch or consume quota
- * - Level 0: Pollinations with turbo model and staggered seed (width=800, height=500)
- * - Level 1: High-res contextual Unsplash source based on slide domain keywords
- * - Level 2: Ultra-safe high-aesthetic tech placeholder (photo-1518770660439-4636190af475)
- * - Detects rate limits / 429 / 500 / broken images and transparently falls back
+ * - Completely free of API rate limits and vendor watermarks
+ * - Primary Engine: Live Wikimedia Commons API for topic-specific real photographs
+ * - Secondary Engine: Curated Domain-Specific Unsplash HD Direct CDN Library
+ * - Lazy-loads images on active slide only with in-memory caching
  */
 
 // Global in-memory cache for loaded slide images across slide navigation
@@ -21,12 +20,6 @@ if (typeof window !== 'undefined' && !window._slideImageCache) {
 export const SlideImageRenderer = ({ slide, topic, index, isActive }) => {
   const [imgSrc, setImgSrc] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [errorCount, setErrorCount] = useState(0);
-
-  // Extract clean keywords for high-relevance fallback
-  const searchKeywords = encodeURIComponent(
-    `${slide?.title || slide?.slide_title || ''} ${topic || ''}`.replace(/[^a-zA-Z0-9 ]/g, ' ').trim().slice(0, 50)
-  );
 
   const cacheKey = `${topic || 'deck'}_slide_${index}`;
 
@@ -41,25 +34,33 @@ export const SlideImageRenderer = ({ slide, topic, index, isActive }) => {
       return;
     }
 
-    // Source hierarchy:
-    // Level 0: Pollinations with turbo model and staggered seed
-    // Level 1: High-res contextual Unsplash source (No rate limits)
-    // Level 2: Clean SVG thematic gradient placeholder / ultra-safe tech photo
-    if (errorCount === 0) {
-      const prompt = encodeURIComponent(`${slide?.image_prompt || slide?.visual_prompt || slide?.title || 'technology'}, corporate tech, realistic, 8k`);
-      setImgSrc(`https://image.pollinations.ai/prompt/${prompt}?width=800&height=500&nologo=true&model=turbo&seed=${index * 137}`);
-    } else if (errorCount === 1) {
-      // Unsplash source based on slide domain keywords
-      setImgSrc(`https://source.unsplash.com/800x500/?${searchKeywords}`);
-    } else {
-      // Ultra-safe fallback: high aesthetic tech placeholder
-      setImgSrc(`https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=800&q=80`);
-    }
-  }, [isActive, errorCount, slide, topic, index, searchKeywords, cacheKey]);
+    let isMounted = true;
+
+    // Resolve via Dual-Engine (Wikimedia -> Curated Unsplash HD)
+    fetchContextualSlidePhoto(slide, topic, index)
+      .then(url => {
+        if (isMounted && url) {
+          setImgSrc(url);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          const fallback = getGuaranteedSlideImage(slide, topic, index);
+          setImgSrc(fallback);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isActive, slide, topic, index, cacheKey]);
 
   const handleImageError = () => {
-    // If Pollinations returns 429, 500, or a broken image, switch immediately to next level
-    setErrorCount(prev => prev + 1);
+    // Guaranteed instant Unsplash HD fallback on image loading error
+    const fallback = getGuaranteedSlideImage(slide, topic, index);
+    if (imgSrc !== fallback) {
+      setImgSrc(fallback);
+    }
   };
 
   const handleImageLoad = () => {
