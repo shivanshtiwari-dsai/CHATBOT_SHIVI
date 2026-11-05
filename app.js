@@ -72,7 +72,7 @@
             id: 'kb_1',
             title: 'About Shivi AI Assistant',
             category: 'General',
-            content: 'Shivi AI is a next-generation conversational assistant conceived and developed by Shivansh (Shivi), featuring intelligent multi-persona engines, live API connectors (Gemini, OpenAI, Groq), voice recognition, audio speech synthesis, and local file storage.',
+            content: 'Shivi AI is a next-generation conversational assistant featuring intelligent multi-persona engines, live API connectors (Gemini, OpenAI, Groq), voice recognition, audio speech synthesis, and secure cloud storage.',
             tags: ['shivi', 'assistant', 'ai', 'overview']
         },
         {
@@ -181,11 +181,7 @@
             googleClientId: '',
             githubClientId: ''
         },
-        systemInstructions: `You are ShiviAI, an intelligent companion and creative presentation engine.
-Identity Directive:
-- You were conceived, designed, and developed by Shivansh (Shivi).
-- If asked about your origin, author, creator, or developer in any language (English, Hindi, Hinglish), always clearly state that you were made by Shivansh (Shivi).
-- Never claim to be created by OpenAI, Google, or any third party.`,
+        systemInstructions: `You are ShiviAI, an intelligent companion and creative presentation engine. Be deeply empathetic, warm, encouraging, and helpful. Answer user questions directly and insightfully.`,
         knowledgeBase: JSON.parse(JSON.stringify(DEFAULT_KNOWLEDGE_BASE)),
         isGenerating: false,
         isRecording: false,
@@ -450,6 +446,7 @@ Identity Directive:
         speakerName: document.getElementById('speakerName'),
         voiceTranscriptText: document.getElementById('voiceTranscriptText'),
         voiceMuteMicBtn: document.getElementById('voiceMuteMicBtn'),
+        voiceDoneSpeakingBtn: document.getElementById('voiceDoneSpeakingBtn'),
         voiceMuteIcon: document.getElementById('voiceMuteIcon'),
         voiceMuteLabel: document.getElementById('voiceMuteLabel'),
         voiceInterruptBtn: document.getElementById('voiceInterruptBtn'),
@@ -2284,32 +2281,36 @@ Identity Directive:
     function retrieveBrainKnowledge(userQuery) {
         if (!state.knowledgeBase || !state.knowledgeBase.length) return '';
         const q = userQuery.toLowerCase();
-        const queryWords = q.split(/\s+/).filter(w => w.length > 2);
+        const isAskingCreator = /\b(who made you|who created you|who built you|your developer|your creator|your owner|kisne banaya|tumhara malik|tumhe kisne|developer kaun|creator kaun)\b/i.test(q);
+        const queryWords = q.split(/\s+/).filter(w => w.length > 2 && w !== 'shivi' && w !== 'shiviai');
         
         const matched = state.knowledgeBase.filter(item => {
+            // NEVER inject creator knowledge unless specifically asked about the creator
+            if (item.id === 'kb_creator' && !isAskingCreator) return false;
+
             const title = (item.title || '').toLowerCase();
             const content = (item.content || '').toLowerCase();
             const category = (item.category || '').toLowerCase();
             const tags = (item.tags || []).map(t => t.toLowerCase());
 
             if (title.includes(q) || content.includes(q) || category.includes(q)) return true;
-            if (tags.some(t => q.includes(t))) return true;
+            if (tags.some(t => q.includes(t) && t !== 'shivi' && t !== 'shiviai')) return true;
 
             const matchCount = queryWords.filter(word => 
-                title.includes(word) || content.includes(word) || tags.some(t => t.includes(word))
+                title.includes(word) || content.includes(word) || tags.some(t => t.includes(word) && t !== 'shivi' && t !== 'shiviai')
             ).length;
 
             return matchCount >= 1;
         });
 
         if (!matched.length) {
-            if (/brain|knowledge|memory|facts|store|data|api|shivi/i.test(userQuery)) {
-                return state.knowledgeBase.slice(0, 4).map(i => `[Knowledge: ${i.title}] (${i.category}): ${i.content}`).join('\n\n');
+            if (/brain|knowledge|memory|facts|store|data|api/i.test(userQuery)) {
+                return state.knowledgeBase.filter(i => i.id !== 'kb_creator').slice(0, 3).map(i => `[Knowledge: ${i.title}] (${i.category}): ${i.content}`).join('\n\n');
             }
             return '';
         }
 
-        return matched.slice(0, 5).map(i => `[Knowledge: ${i.title}] (${i.category}): ${i.content}`).join('\n\n');
+        return matched.slice(0, 4).map(i => `[Knowledge: ${i.title}] (${i.category}): ${i.content}`).join('\n\n');
     }
 
     // ==========================================
@@ -2512,11 +2513,15 @@ Here is a structured overview:
         const provider = state.brainProvider;
         const key = (state.apiKeys[provider] || '').trim();
 
+        const isAskingCreator = /\b(who made you|who created you|who built you|your developer|your creator|your owner|kisne banaya|tumhara malik|tumhe kisne|developer kaun|creator kaun)\b/i.test(userText);
+
+        const creatorInstruction = isAskingCreator
+            ? `The user is asking who created you. Reply proudly that you were created and developed by Shivansh (Shivi).`
+            : `CRITICAL SILENCE RULE: Do NOT mention your creator, developer, or the name "Shivansh" in this response. Answer ONLY the user's actual question directly and naturally without any self-introduction.`;
+
         const personaCfg = PERSONA_CONFIG[state.currentPersona] || PERSONA_CONFIG.companion;
         const systemPromptText = `You are ShiviAI, an intelligent companion and creative presentation engine.
-Identity Directive:
-- You were conceived, designed, and developed by Shivansh (Shivi).
-- If asked about your origin, author, creator, or developer in any language (English, Hindi, Hinglish), always clearly state that you were made by Shivansh (Shivi).
+${creatorInstruction}
 - Never claim to be created by OpenAI, Google, or any third party.
 
 Active Operating Mode: ${personaCfg.name}
@@ -3015,6 +3020,61 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
         elements.voiceTranscriptText.textContent = text || (speaker === 'user' ? 'Listening...' : 'Thinking...');
     }
 
+    /**
+     * Dedicated Voice Call AI Dispatcher
+     * Produces natural, concise conversational answers without canned repetitive templates
+     */
+    async function queryLiveVoiceAI(speechText, knowledgeContext = '', history = []) {
+        const isAskingCreator = /\b(who made you|who created you|who built you|your developer|your creator|your owner|kisne banaya|tumhara malik|tumhe kisne|developer kaun|creator kaun)\b/i.test(speechText);
+
+        const creatorInstruction = isAskingCreator
+            ? `The user is asking who created you. Reply proudly that you were created and developed by Shivansh (Shivi).`
+            : `CRITICAL SILENCE RULE: Do NOT mention your creator, developer, or the name "Shivansh" in this response. Answer ONLY the user's actual question directly and naturally without any self-introduction.`;
+
+        const voiceSystemPrompt = `You are ShiviAI, speaking in a live, real-time voice call with the user.
+${creatorInstruction}
+Speak naturally, warmly, and concisely as if talking on the phone (1 to 3 spoken sentences maximum).
+NEVER use markdown formatting, markdown headers (#), bullet points, tables, asterisks, or code blocks, because your words will be read aloud through text-to-speech. Answer directly and engagingly.`;
+
+        // 1. Direct call to backend /api/chat with active LLM pipeline (Groq / Gemini / OpenAI / OpenRouter)
+        try {
+            const provider = state.brainProvider || 'auto';
+            const key = (state.apiKeys[provider] || '').trim();
+            const res = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message: speechText,
+                    history: (history || []).slice(-6),
+                    persona: state.currentPersona || 'companion',
+                    systemPrompt: voiceSystemPrompt,
+                    knowledgeContext: knowledgeContext,
+                    mode: 'voice'
+                })
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                if (data.success && data.reply && data.reply.trim()) {
+                    return data.reply.trim();
+                }
+            }
+        } catch (serverErr) {
+            console.warn('[Live Voice /api/chat error]:', serverErr.message);
+        }
+
+        // 2. Direct client fallback via queryLiveAI if available
+        try {
+            const clientReply = await queryLiveAI(speechText, knowledgeContext, (history || []).slice(-6), []);
+            if (clientReply && clientReply.trim()) {
+                return clientReply.trim();
+            }
+        } catch (_) {}
+
+        // 3. Spoken natural fallback (never repetitive canned markdown tables!)
+        return `I heard you ask about ${speechText}. Could you tell me a little more so I can help?`;
+    }
+
     async function handleLiveVoiceUserUtterance(userSpeech) {
         if (!userSpeech || !userSpeech.trim()) return;
         const cleanUserSpeech = userSpeech.trim();
@@ -3057,29 +3117,15 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
 
         try {
             let aiReply = '';
-            // Check identity or query live AI
+            // Check identity or query dynamic voice AI
             if (isIdentityQuery(cleanUserSpeech)) {
                 aiReply = IDENTITY_DIRECT_REPLY;
-            } else if (state.brainProvider !== 'builtin' || state.backendConfig.isOnline) {
-                aiReply = await queryLiveAI(cleanUserSpeech, knowledgeContext, history, []);
-            } else if (window.ShiviBrain) {
-                const brainRes = await window.ShiviBrain.ask({
-                    message: cleanUserSpeech,
-                    provider: state.brainProvider,
-                    apiKey: state.apiKeys[state.brainProvider],
-                    model: state.apiModels[state.brainProvider],
-                    persona: state.currentPersona,
-                    systemPrompt: state.systemInstructions,
-                    history: history,
-                    knowledgeContext: knowledgeContext
-                });
-                aiReply = brainRes.reply;
             } else {
-                aiReply = generateShiviResponse(cleanUserSpeech, knowledgeContext);
+                aiReply = await queryLiveVoiceAI(cleanUserSpeech, knowledgeContext, history);
             }
 
             if (!aiReply || !aiReply.trim()) {
-                aiReply = "I understand. How else can I assist you?";
+                aiReply = "I am listening closely. What would you like to explore next?";
             }
 
             // 5. Append AI message to Chat Session
@@ -3410,11 +3456,13 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
         const prompt = imageData.prompt || 'AI Artwork';
         const cleanPrompt = escapeHtml(prompt);
         const cleanUrl = escapeHtml(imageData.imageUrl || '');
-        const cleanProvider = escapeHtml((imageData.provider || 'pollinations').toUpperCase());
-        const cleanModel = escapeHtml(imageData.model || 'FLUX');
+        const cleanProvider = escapeHtml((imageData.provider || 'Shivi AI Vision').toUpperCase());
+        const cleanModel = escapeHtml(imageData.model || 'FLUX.1-schnell');
+        const enhancedPrompt = imageData.enhancedPrompt || imageData.revisedPrompt || '';
+        const cleanEnhanced = escapeHtml(enhancedPrompt);
 
         // High-speed fallback URL for instant recovery if flux times out
-        const fallbackUrl = imageData.fallbackUrl || (typeof buildFastFallbackImageUrl === 'function' ? buildFastFallbackImageUrl(prompt) : cleanUrl.replace('model=flux', 'model=turbo'));
+        const fallbackUrl = imageData.fallbackUrl || cleanUrl;
         const cleanFallbackUrl = escapeHtml(fallbackUrl);
 
         const imageJsonStr = escapeHtml(JSON.stringify(imageData));
@@ -3460,6 +3508,10 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
                         <span class="image-media-prompt-text">✨ <strong>Prompt:</strong> ${cleanPrompt}</span>
                         <span class="image-engine-tag">${cleanProvider} · ${cleanModel}</span>
                     </div>
+                    ${cleanEnhanced && cleanEnhanced !== cleanPrompt ? `
+                    <div class="image-media-enhanced-row" style="font-size: 11px; color: var(--text-muted, #94a3b8); margin-top: 5px; line-height: 1.4;">
+                        <strong>Expanded Prompt (DALL-E 3 Style):</strong> ${cleanEnhanced}
+                    </div>` : ''}
                 </div>
             </div>
         `;
@@ -4493,7 +4545,9 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
             if (elements.canvasImageActions) elements.canvasImageActions.style.display = 'flex';
             if (elements.imageStudioPromptInput) elements.imageStudioPromptInput.value = data.prompt || '';
             if (elements.canvasImagePrompt) {
-                elements.canvasImagePrompt.innerHTML = `✨ <strong>Prompt:</strong> ${escapeHtml(data.prompt || '')}`;
+                const promptText = escapeHtml(data.prompt || '');
+                const enhancedText = data.enhancedPrompt || data.revisedPrompt;
+                elements.canvasImagePrompt.innerHTML = `✨ <strong>Prompt:</strong> ${promptText}${enhancedText && enhancedText !== data.prompt ? `<br><small style="color:var(--text-muted);display:block;margin-top:4px;font-size:11px;line-height:1.4;"><strong>Expanded Prompt (DALL-E 3 Style):</strong> ${escapeHtml(enhancedText)}</small>` : ''}`;
             }
             if (elements.canvasRawCode) elements.canvasRawCode.textContent = JSON.stringify(data, null, 2);
             if (elements.canvasSourceLang) elements.canvasSourceLang.textContent = 'JSON';
@@ -5918,12 +5972,14 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
             const apiKey = (options.apiKey || state.imageApiKey || state.apiKeys.openai || '').trim();
             const style = options.style || state.defaultImageStyle || 'vivid';
             const size = options.size || state.defaultImageSize || '1280x720';
+            const aspectRatio = options.aspectRatio || (size === '1024x1024' ? '1:1' : '16:9');
 
             const res = await fetch('/api/generate-image', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     prompt: prompt,
+                    aspectRatio: aspectRatio,
                     provider: provider,
                     apiKey: apiKey,
                     style: style,
@@ -5945,11 +6001,12 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
 
             const imageArtifactData = {
                 imageUrl: data.imageUrl,
-                fallbackUrl: data.fallbackUrl || (typeof buildFastFallbackImageUrl === 'function' ? buildFastFallbackImageUrl(prompt) : ''),
-                prompt: prompt,
-                revisedPrompt: data.revisedPrompt || prompt,
-                provider: data.provider || provider,
-                model: data.model || 'flux',
+                fallbackUrl: data.fallbackUrl || data.imageUrl,
+                prompt: data.prompt || prompt,
+                revisedPrompt: data.enhancedPrompt || data.revisedPrompt || prompt,
+                enhancedPrompt: data.enhancedPrompt || data.revisedPrompt || prompt,
+                provider: data.provider || 'Shivi AI Vision',
+                model: data.model || 'FLUX.1-schnell',
                 timestamp: data.timestamp || new Date().toISOString()
             };
 
@@ -6001,24 +6058,27 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
         const t = (text || '').trim();
         if (!t) return { type: 'CHAT' };
 
-        // 1. Tool Call: Image Generation
+        // 1. Tool Call: Image Generation (ChatGPT & Gemini Natural Phrasing)
         const isImageSlash = /^\/(image|draw|imagine|pic|art)\s+/i.test(t);
-        const isImageNatural = /^(?:generate|create|draw|make|paint|render)\s+(?:an?\s+)?(?:image|picture|photo|artwork|illustration|drawing|portrait|wallpaper)\s+(?:of|for|about|depicting)\s+(.+)/i.test(t)
-            || /^(?:draw|paint|illustrate|render)(?:\s+me)?\s+(?:an?\s+)?(.+)/i.test(t)
+        const isImageNatural = /^(?:please\s+)?(?:can you\s+)?(?:generate|create|draw|make|paint|render)\s+(?:an?\s+)?(?:image|picture|photo|artwork|illustration|drawing|portrait|wallpaper)\s+(?:of|for|about|depicting)\s+(.+)/i.test(t)
+            || /^(?:please\s+)?(?:can you\s+)?(?:draw|paint|illustrate|render)(?:\s+me)?\s+(?:an?\s+)?(.+)/i.test(t)
             || /^(?:picture|photo|image|portrait|illustration)\s+(?:of|for)\s+(.+)/i.test(t)
             || /^(?:mujhe\s+)?(?:ek\s+)?(?:photo|image|tasveer|chitra)\s+(?:banao|banake do|chahiye|create karo|generate karo)\s*(?:of|ki|ka)?\s*(.+)?/i.test(t)
-            || /(?:photo|image|tasveer|picture)\s+(?:banao|generate karo|create karo)/i.test(t);
+            || /(?:photo|image|tasveer|picture|chitra)\s+(?:banao|banado|banake do|chahiye|generate karo|create karo)/i.test(t);
 
         if (isImageSlash || isImageNatural) {
             let prompt = t;
             if (isImageSlash) {
                 prompt = t.replace(/^\/(image|draw|imagine|pic|art)\s+/i, '').trim();
             } else {
-                prompt = t.replace(/^(?:generate|create|draw|make|paint|render)\s+(?:an?\s+)?(?:image|picture|photo|artwork|illustration|drawing|portrait|wallpaper)\s+(?:of|for|about|depicting)\s+/i, '')
-                          .replace(/^(?:draw|paint|illustrate|render)(?:\s+me)?\s+(?:an?\s+)?/i, '')
-                          .replace(/^(?:picture|photo|image|portrait|illustration)\s+(?:of|for)\s+/i, '')
-                          .replace(/^(?:mujhe\s+)?(?:ek\s+)?(?:photo|image|tasveer|chitra)\s+(?:banao|banake do|chahiye|create karo|generate karo)\s*(?:of|ki|ka)?\s*/i, '')
-                          .trim();
+                prompt = t
+                    .replace(/^(?:please\s+)?(?:can you\s+)?(?:generate|create|draw|make|paint|render)\s+(?:an?\s+)?(?:image|picture|photo|artwork|illustration|drawing|portrait|wallpaper)\s+(?:of|for|about|depicting)\s+/i, '')
+                    .replace(/^(?:please\s+)?(?:can you\s+)?(?:draw|paint|illustrate|render)(?:\s+me)?\s+(?:an?\s+)?/i, '')
+                    .replace(/^(?:picture|photo|image|portrait|illustration)\s+(?:of|for)\s+/i, '')
+                    .replace(/^(?:mujhe\s+)?(?:ek\s+)?(?:photo|image|tasveer|chitra)\s+(?:banao|banake do|chahiye|create karo|generate karo)\s*(?:of|ki|ka)?\s*/i, '')
+                    .replace(/\s*(?:ki|ka|ke|ko)?\s*(?:photo|image|tasveer|picture|chitra)\s+(?:banao|banado|banake do|chahiye|generate karo|create karo)\s*$/i, '')
+                    .replace(/^(?:ek\s+)/i, '')
+                    .trim();
             }
             return { type: 'IMAGE', prompt: prompt || t };
         }
@@ -7937,6 +7997,13 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
         }
         if (elements.voiceMuteMicBtn) {
             elements.voiceMuteMicBtn.addEventListener('click', toggleLiveVoiceMute);
+        }
+        if (elements.voiceDoneSpeakingBtn) {
+            elements.voiceDoneSpeakingBtn.addEventListener('click', () => {
+                if (window.voiceService) {
+                    window.voiceService.commitCurrentTranscriptNow();
+                }
+            });
         }
         if (elements.voiceInterruptBtn) {
             elements.voiceInterruptBtn.addEventListener('click', interruptVoicePlayback);

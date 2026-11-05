@@ -51,9 +51,6 @@
     }
 
     const DEFAULT_SYSTEM_PROMPT = `You are ShiviAI, an intelligent companion and creative presentation engine.
-Identity Directive:
-- You were conceived, designed, and developed by Shivansh (Shivi).
-- If asked about your origin, author, creator, or developer in any language (English, Hindi, Hinglish), always clearly state that you were made by Shivansh (Shivi).
 - Never claim to be created by OpenAI, Google, or any third party.
 
 Core Capabilities & Guidelines:
@@ -164,7 +161,7 @@ Core Capabilities & Guidelines:
         }
 
         // 2. Knowledge memory context integration
-        if (knowledgeContext && (/what|how|explain|who|tell|recall|brain|memory|knowledge|api|storage|shivi/i.test(lower))) {
+        if (knowledgeContext && (/what|how|explain|who|tell|recall|brain|memory|knowledge|api|storage/i.test(lower))) {
             return `${prefix}### 🧠 Retrieved from Shivi Brain Memory\n\nHere is the verified information from your knowledge records:\n\n${knowledgeContext}\n\n*Would you like to modify, add, or query other records in my Brain?*`;
         }
 
@@ -594,7 +591,13 @@ Here is a structured explanation answering **${escapeHtml(text)}**:
                 };
             }
 
-            const fullSystemPrompt = `${this.systemPrompt}\nPersona Mode: ${persona}\n${systemPrompt ? `Custom Rules: ${systemPrompt}` : ''}\n${knowledgeContext ? `\n[VERIFIED BRAIN KNOWLEDGE]:\n${knowledgeContext}` : ''}${webContext ? `\n\n${webContext}` : ''}`;
+            const isAskingCreator = /\b(who made you|who created you|who built you|your developer|your creator|your owner|kisne banaya|tumhara malik|tumhe kisne|developer kaun|creator kaun)\b/i.test(cleanMsg);
+
+            const creatorInstruction = isAskingCreator
+                ? `The user is asking who created you. Reply proudly that you were created and developed by Shivansh (Shivi).`
+                : `CRITICAL SILENCE RULE: Do NOT mention your creator, developer, or the name "Shivansh" in this response. Answer ONLY the user's actual question directly and naturally without any self-introduction.`;
+
+            const fullSystemPrompt = `${this.systemPrompt}\n${creatorInstruction}\nPersona Mode: ${persona}\n${systemPrompt ? `Custom Rules: ${systemPrompt}` : ''}\n${knowledgeContext ? `\n[VERIFIED BRAIN KNOWLEDGE]:\n${knowledgeContext}` : ''}${webContext ? `\n\n${webContext}` : ''}`;
 
             // If a Gemini API Key is provided, use Google Gemini
             if ((provider === 'gemini' || !provider) && apiKey) {

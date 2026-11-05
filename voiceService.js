@@ -108,6 +108,153 @@ function getBestNaturalVoice(synth, targetLang = 'en-US') {
     return voices.find(v => (v.lang || '').startsWith("en")) || voices[0] || null;
 }
 
+/**
+ * Continuous Voice Call Engine (Gemini / ChatGPT Live Voice Architecture)
+ * - Zero listening time limits
+ * - continuous = true & interimResults = true
+ * - 2.8s Smart Silence Debouncer + Manual Instant Send
+ */
+class ContinuousVoiceCallEngine {
+    constructor() {
+        const SpeechRecognition = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+        this.recognition = SpeechRecognition ? new SpeechRecognition() : null;
+        this.synth = typeof window !== 'undefined' ? window.speechSynthesis : null;
+        this.silenceTimer = null;
+        this.fullTranscript = '';
+        this.isCallActive = false;
+        this.isAIProcessing = false;
+        this.lang = 'en-IN';
+        this.onLiveTranscript = null;
+        this.onFinalSubmit = null;
+    }
+
+    setLanguage(lang) {
+        this.lang = lang || 'en-IN';
+        if (this.recognition) {
+            this.recognition.lang = this.lang;
+        }
+    }
+
+    startListening(onLiveTranscript, onFinalSubmit) {
+        if (!this.recognition || this.isAIProcessing) return;
+
+        this.onLiveTranscript = onLiveTranscript;
+        this.onFinalSubmit = onFinalSubmit;
+        this.fullTranscript = '';
+        this.isCallActive = true;
+        this.isAIProcessing = false;
+
+        this.recognition.continuous = true;      // NEVER cut off after a few seconds
+        this.recognition.interimResults = true;  // Capture every word in real time
+        this.recognition.lang = this.lang || 'en-IN'; // Supports English, Hindi & Hinglish naturally
+
+        this.recognition.onstart = () => {
+            this.isCallActive = true;
+        };
+
+        this.recognition.onresult = (event) => {
+            if (this.isAIProcessing) return;
+
+            // Reset silence timer every time the user utters a sound
+            if (this.silenceTimer) clearTimeout(this.silenceTimer);
+
+            let finalChunk = '';
+            let interimChunk = '';
+
+            for (let i = 0; i < event.results.length; i++) {
+                const transcriptPiece = event.results[i][0].transcript;
+                if (event.results[i].isFinal) {
+                    finalChunk += transcriptPiece + ' ';
+                } else {
+                    interimChunk += transcriptPiece;
+                }
+            }
+
+            this.fullTranscript = (finalChunk + interimChunk).trim();
+            if (this.onLiveTranscript) {
+                this.onLiveTranscript(this.fullTranscript);
+            }
+
+            // Only submit AFTER the user has completely stopped speaking for 2.8 full seconds
+            if (this.fullTranscript.length > 2) {
+                this.silenceTimer = setTimeout(() => {
+                    const finalSpokenText = this.fullTranscript.trim();
+                    if (finalSpokenText && this.isCallActive && !this.isAIProcessing) {
+                        this.commitNow();
+                    }
+                }, 2800);
+            }
+        };
+
+        this.recognition.onerror = (e) => {
+            if (e.error === 'no-speech' && this.isCallActive && !this.isAIProcessing) {
+                // Keep listening patiently without cutting the call
+                try { this.recognition.start(); } catch {}
+            }
+        };
+
+        this.recognition.onend = () => {
+            // If browser stops recognition prematurely while user hasn't finished, keep it alive
+            if (this.isCallActive && !this.isAIProcessing && !this.fullTranscript) {
+                try { this.recognition.start(); } catch {}
+            }
+        };
+
+        try {
+            this.recognition.start();
+        } catch (e) {}
+    }
+
+    commitNow() {
+        if (this.silenceTimer) {
+            clearTimeout(this.silenceTimer);
+            this.silenceTimer = null;
+        }
+        if (this.isAIProcessing) return;
+
+        const finalSpokenText = (this.fullTranscript || '').trim();
+        if (!finalSpokenText) return;
+
+        this.isAIProcessing = true;
+        this.fullTranscript = '';
+        this.stopListening();
+
+        if (this.onFinalSubmit) {
+            this.onFinalSubmit(finalSpokenText);
+        }
+    }
+
+    onAiResponseFinished() {
+        this.isAIProcessing = false;
+        this.fullTranscript = '';
+        if (this.isCallActive) {
+            // Echo prevention delay before resuming mic
+            setTimeout(() => {
+                if (this.isCallActive && !this.isAIProcessing) {
+                    this.startListening(this.onLiveTranscript, this.onFinalSubmit);
+                }
+            }, 600);
+        }
+    }
+
+    stopListening() {
+        if (this.silenceTimer) {
+            clearTimeout(this.silenceTimer);
+            this.silenceTimer = null;
+        }
+        if (this.recognition) {
+            try { this.recognition.stop(); } catch (e) {}
+        }
+    }
+
+    endCall() {
+        this.isCallActive = false;
+        this.isAIProcessing = false;
+        this.fullTranscript = '';
+        this.stopListening();
+    }
+}
+
 class VoiceService {
     constructor() {
         this.synth = typeof window !== 'undefined' ? window.speechSynthesis : null;
@@ -133,10 +280,12 @@ class VoiceService {
         // 🌟 Continuous Voice Conversation Engine State
         this.isContinuousMode = false;
         this.conversationState = 'idle'; // 'idle' | 'listening' | 'thinking' | 'speaking' | 'paused'
-        this.currentLanguage = 'en-US';  // 'en-US' | 'en-IN' | 'hi-IN'
+        this.currentLanguage = 'en-IN';  // 'en-IN' | 'en-US' | 'hi-IN'
         this.isMicMuted = false;
         this.continuousCallbacks = null;
-        this.accumulatedTranscript = '';
+        this.fullTranscript = '';
+        this.isAIProcessing = false;
+        this.continuousEngine = new ContinuousVoiceCallEngine();
         this.restartRecognitionTimeout = null;
 
         this.initVoice();
@@ -259,9 +408,9 @@ class VoiceService {
 
         try {
             this.recognition = new SpeechRec();
-            this.recognition.continuous = false; // We manage continuous looping with smart re-arming
+            this.recognition.continuous = true; // Continuous listening: never cuts off mid-sentence
             this.recognition.interimResults = true;
-            this.recognition.lang = this.currentLanguage || 'en-US';
+            this.recognition.lang = this.currentLanguage || 'en-IN';
         } catch (err) {
             console.warn('[VoiceService] SpeechRecognition init warning:', err);
         }
@@ -593,7 +742,7 @@ class VoiceService {
         }
 
         // 2. Stop Browser SpeechSynthesis
-        if (this.synth) {
+        if (this.synth && typeof this.synth.cancel === 'function') {
             try {
                 this.synth.cancel();
             } catch (err) {
@@ -655,6 +804,7 @@ class VoiceService {
 
     /**
      * Arm the microphone listener for continuous conversation
+     * Never cuts off mid-sentence; uses 2.8s silence debouncer
      */
     startContinuousListening() {
         if (!this.isContinuousMode || this.isMicMuted) return;
@@ -675,10 +825,14 @@ class VoiceService {
             return;
         }
 
-        this.accumulatedTranscript = '';
+        this.fullTranscript = '';
+        this.isAIProcessing = false;
         this.setConversationState('listening');
 
-        this.recognition.lang = this.currentLanguage || 'en-US';
+        // Continuous listening parameters
+        this.recognition.continuous = true;      // NEVER cut off after a few seconds
+        this.recognition.interimResults = true;  // Capture every word in real time
+        this.recognition.lang = this.currentLanguage || 'en-IN'; // Supports English, Hindi & Hinglish naturally
 
         this.recognition.onstart = () => {
             this.isListening = true;
@@ -686,42 +840,45 @@ class VoiceService {
         };
 
         this.recognition.onresult = (event) => {
-            let interimTranscript = '';
-            for (let i = event.resultIndex; i < event.results.length; i++) {
-                const part = event.results[i][0].transcript;
+            if (this.isAIProcessing) return;
+
+            // Reset silence timer every time user utters a sound
+            if (this.silenceTimer) clearTimeout(this.silenceTimer);
+
+            let finalChunk = '';
+            let interimChunk = '';
+
+            for (let i = 0; i < event.results.length; i++) {
+                const piece = event.results[i][0].transcript;
                 if (event.results[i].isFinal) {
-                    this.accumulatedTranscript += (this.accumulatedTranscript ? ' ' : '') + part;
+                    finalChunk += piece + ' ';
                 } else {
-                    interimTranscript += part;
+                    interimChunk += piece;
                 }
             }
 
-            const currentTotal = (this.accumulatedTranscript + (interimTranscript ? ' ' + interimTranscript : '')).trim();
+            this.fullTranscript = (finalChunk + interimChunk).trim();
 
             if (this.continuousCallbacks && this.continuousCallbacks.onTranscriptUpdate) {
-                this.continuousCallbacks.onTranscriptUpdate(currentTotal, false);
+                this.continuousCallbacks.onTranscriptUpdate(this.fullTranscript, false);
             }
 
-            // Natural pause detection: auto-submit after 1.8s of silence if speech detected
-            if (currentTotal.length > 1) {
-                if (this.silenceTimer) clearTimeout(this.silenceTimer);
+            // Only submit AFTER the user has completely stopped speaking for 2.8 full seconds
+            if (this.fullTranscript.length > 2) {
                 this.silenceTimer = setTimeout(() => {
-                    if (this.isListening && this.isContinuousMode) {
-                        const finalQuery = currentTotal.trim();
-                        this.stopListening();
-                        this.handleContinuousSpeechCommitted(finalQuery);
+                    const finalSpokenText = (this.fullTranscript || '').trim();
+                    if (finalSpokenText && this.isContinuousMode && !this.isMicMuted && !this.isAIProcessing) {
+                        this.commitCurrentTranscriptNow(finalSpokenText);
                     }
-                }, 1800);
+                }, 2800);
             }
         };
 
         this.recognition.onerror = (event) => {
-            if (this.silenceTimer) clearTimeout(this.silenceTimer);
-            this.isListening = false;
-            console.warn('[Continuous Voice] Recognition event notice:', event.error);
-
-            if (this.isContinuousMode && !this.isMicMuted && event.error !== 'aborted' && event.error !== 'not-allowed') {
-                this.scheduleContinuousRestart(800);
+            console.warn('[Continuous Voice] Recognition notice:', event.error);
+            if (event.error === 'no-speech' && this.isContinuousMode && !this.isMicMuted && !this.isAIProcessing) {
+                // Keep listening patiently without cutting the call
+                try { this.recognition.start(); } catch {}
             }
         };
 
@@ -729,19 +886,9 @@ class VoiceService {
             if (this.silenceTimer) clearTimeout(this.silenceTimer);
             this.isListening = false;
 
-            if (this.conversationState === 'speaking' || this.conversationState === 'thinking') {
-                return;
-            }
-
-            if (this.accumulatedTranscript && this.accumulatedTranscript.trim()) {
-                const finalQuery = this.accumulatedTranscript.trim();
-                this.accumulatedTranscript = '';
-                this.handleContinuousSpeechCommitted(finalQuery);
-                return;
-            }
-
-            if (this.isContinuousMode && !this.isMicMuted && this.conversationState === 'listening') {
-                this.scheduleContinuousRestart(300);
+            // If browser stops recognition prematurely while user hasn't finished, keep it alive
+            if (this.isContinuousMode && !this.isMicMuted && !this.isAIProcessing && !this.fullTranscript) {
+                try { this.recognition.start(); } catch {}
             }
         };
 
@@ -749,49 +896,65 @@ class VoiceService {
             this.recognition.start();
         } catch (err) {
             console.warn('[Continuous Voice] Start notice:', err);
-            if (this.isContinuousMode && !this.isMicMuted) {
-                this.scheduleContinuousRestart(1000);
+            if (this.isContinuousMode && !this.isMicMuted && !this.isAIProcessing) {
+                this.scheduleContinuousRestart(800);
             }
         }
     }
 
     scheduleContinuousRestart(delayMs = 400) {
-        if (!this.isContinuousMode || this.isMicMuted) return;
+        if (!this.isContinuousMode || this.isMicMuted || this.isAIProcessing) return;
         if (this.restartRecognitionTimeout) clearTimeout(this.restartRecognitionTimeout);
 
         this.restartRecognitionTimeout = setTimeout(() => {
-            if (this.isContinuousMode && !this.isMicMuted && !this.isSpeaking && this.conversationState !== 'thinking') {
+            if (this.isContinuousMode && !this.isMicMuted && !this.isSpeaking && !this.isAIProcessing) {
                 this.startContinuousListening();
             }
         }, delayMs);
     }
 
-    handleContinuousSpeechCommitted(finalSpeech) {
-        if (!finalSpeech || !finalSpeech.trim()) {
-            if (this.isContinuousMode && !this.isMicMuted) {
-                this.startContinuousListening();
-            }
-            return;
+    /**
+     * Instantly commit user speech either via 2.8s silence or manual "[Done Speaking]" tap
+     */
+    commitCurrentTranscriptNow(forcedText = null) {
+        if (this.silenceTimer) {
+            clearTimeout(this.silenceTimer);
+            this.silenceTimer = null;
         }
+        if (this.isAIProcessing) return;
 
+        const textToSubmit = (forcedText || this.fullTranscript || '').trim();
+        if (!textToSubmit) return;
+
+        this.isAIProcessing = true;
+        this.fullTranscript = '';
+        this.stopListening();
         this.setConversationState('thinking');
+
         if (this.continuousCallbacks && this.continuousCallbacks.onUserMessage) {
-            this.continuousCallbacks.onUserMessage(finalSpeech.trim());
+            this.continuousCallbacks.onUserMessage(textToSubmit);
         }
+    }
+
+    handleContinuousSpeechCommitted(finalSpeech) {
+        this.commitCurrentTranscriptNow(finalSpeech);
     }
 
     /**
      * Called when Shivi finishes speaking her answer in continuous mode
      */
     onAiResponseFinished() {
+        this.isAIProcessing = false;
+        this.fullTranscript = '';
         if (!this.isContinuousMode || this.isMicMuted) return;
 
-        // 400ms echo-prevention delay before reopening mic
+        // 600ms echo-prevention delay before reopening mic
         setTimeout(() => {
-            if (this.isContinuousMode && !this.isMicMuted) {
+            if (this.isContinuousMode && !this.isMicMuted && !this.isAIProcessing) {
+                this.setConversationState('listening');
                 this.startContinuousListening();
             }
-        }, 400);
+        }, 600);
     }
 
     /**
@@ -939,11 +1102,12 @@ class VoiceService {
 const voiceService = new VoiceService();
 
 if (typeof window !== 'undefined') {
+    window.ContinuousVoiceCallEngine = ContinuousVoiceCallEngine;
     window.getBestNaturalVoice = getBestNaturalVoice;
     window.VoiceService = VoiceService;
     window.voiceService = voiceService;
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { VoiceService, voiceService, getBestNaturalVoice };
+    module.exports = { ContinuousVoiceCallEngine, VoiceService, voiceService, getBestNaturalVoice };
 }

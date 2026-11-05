@@ -18,6 +18,7 @@ const crypto = require('node:crypto');
 const Brain = require('./brain.js');
 const PptxGenJS = require('pptxgenjs');
 const { enhanceImagePrompt, buildOptimizedImageUrl, buildFastFallbackImageUrl } = require('./imageService.js');
+const { expandToMasterImagePrompt, generateMasterAiImage, cleanUserImageQuery } = require('./services/imageGenerationEngine.js');
 const { getGuaranteedSlideImage, fetchContextualSlidePhoto, CURATED_HD_VISUALS } = require('./services/slideImageEngine.js');
 const { connectDB, isMongoConnected, getConnectionStatus } = require('./config/db.js');
 const storage = require('./services/storageService.js');
@@ -546,21 +547,26 @@ async function callImageGenerator(provider, apiKey, prompt, options = {}) {
         };
     }
 
-    // 2. Pollinations.ai Flux AI (High-Resolution 1280x720 16:9 Endpoint with Flux Model for Peak Clarity)
+    // 2. Multi-Engine Master Visual Pipeline (HF FLUX + Pollinations Flux/Turbo + Banner Rejection + Base64)
     const [w, h] = size.includes('x') ? size.split('x').map(Number) : [1280, 720];
     const width = w || 1280;
     const height = h || 720;
-    const seed = options.seed || Math.floor(Math.random() * 10000000);
-    const targetModel = options.model || 'flux';
-    const pollinationsUrl = buildOptimizedImageUrl(enhancedPrompt, seed, width, height, targetModel);
-    const fallbackUrl = buildFastFallbackImageUrl(enhancedPrompt, seed, width, height);
+    const aspectRatio = (width === height) ? '1:1' : '16:9';
+
+    const masterResult = await generateMasterAiImage(prompt, {
+        aspectRatio,
+        width,
+        height,
+        style
+    });
 
     return {
-        imageUrl: pollinationsUrl,
-        fallbackUrl: fallbackUrl,
-        revisedPrompt: enhanceImagePrompt(enhancedPrompt),
-        provider: 'pollinations',
-        model: targetModel
+        imageUrl: masterResult.imageUrl,
+        fallbackUrl: masterResult.imageUrl,
+        revisedPrompt: masterResult.enhancedPrompt,
+        enhancedPrompt: masterResult.enhancedPrompt,
+        provider: masterResult.provider || 'Shivi AI Vision',
+        model: masterResult.model || 'FLUX.1-schnell'
     };
 }
 
@@ -2716,41 +2722,30 @@ if (req.method === 'POST' && pathname === '/api/chat') {
             // TOOL ROUTING: IMAGE GENERATION
             // ----------------------------------------------------
             const isImageSlash = /^\/(image|draw|imagine|pic|art)\s+/i.test(userMessage);
-            const isImageNatural = /^(?:generate|create|draw|make|paint|render)\s+(?:an?\s+)?(?:image|picture|photo|artwork|illustration|drawing|portrait|wallpaper)\s+(?:of|for|about|depicting)\s+(.+)/i.test(userMessage)
-                || /^(?:draw|paint|illustrate|render)(?:\s+me)?\s+(?:an?\s+)?(.+)/i.test(userMessage)
+            const isImageNatural = /^(?:please\s+)?(?:can you\s+)?(?:generate|create|draw|make|paint|render)\s+(?:an?\s+)?(?:image|picture|photo|artwork|illustration|drawing|portrait|wallpaper)\s+(?:of|for|about|depicting)\s+(.+)/i.test(userMessage)
+                || /^(?:please\s+)?(?:can you\s+)?(?:draw|paint|illustrate|render)(?:\s+me)?\s+(?:an?\s+)?(.+)/i.test(userMessage)
                 || /^(?:picture|photo|image|portrait|illustration)\s+(?:of|for)\s+(.+)/i.test(userMessage)
-                || /(?:photo|image|tasveer|picture|chitra)\s+(?:banao|banake do|chahiye|create karo|generate karo)/i.test(userMessage);
+                || /^(?:mujhe\s+)?(?:ek\s+)?(?:photo|image|tasveer|chitra)\s+(?:banao|banake do|chahiye|create karo|generate karo)\s*(?:of|ki|ka)?\s*(.+)?/i.test(userMessage)
+                || /(?:photo|image|tasveer|picture|chitra)\s+(?:banao|banado|banake do|chahiye|generate karo|create karo)/i.test(userMessage);
 
             if (isImageSlash || isImageNatural) {
-                let cleanPrompt = userMessage;
-                if (isImageSlash) {
-                    cleanPrompt = userMessage.replace(/^\/(image|draw|imagine|pic|art)\s+/i, '').trim();
-                } else {
-                    cleanPrompt = userMessage
-                        .replace(/^(?:generate|create|draw|make|paint|render)\s+(?:an?\s+)?(?:image|picture|photo|artwork|illustration|drawing|portrait|wallpaper)\s+(?:of|for|about|depicting)\s+/i, '')
-                        .replace(/^(?:draw|paint|illustrate|render)(?:\s+me)?\s+(?:an?\s+)?/i, '')
-                        .replace(/^(?:picture|photo|image|portrait|illustration)\s+(?:of|for)\s+/i, '')
-                        .replace(/^(?:mujhe\s+)?(?:ek\s+)?(?:photo|image|tasveer|chitra)\s+(?:banao|banake do|chahiye|create karo|generate karo)\s*(?:of|ki|ka)?\s*/i, '')
-                        .replace(/(?:photo|image|tasveer|picture|chitra)\s+(?:banao|banake do|chahiye|create karo|generate karo)/i, '')
-                        .trim();
-                }
+                let cleanPrompt = cleanUserImageQuery(userMessage);
                 if (!cleanPrompt) cleanPrompt = userMessage;
 
-                const seed = Math.floor(Math.random() * 10000000);
-                const imageUrl = buildOptimizedImageUrl(cleanPrompt, seed, 1280, 720, 'flux');
-                const fallbackUrl = buildFastFallbackImageUrl(cleanPrompt, seed, 1280, 720);
+                const imageResult = await generateMasterAiImage(cleanPrompt, { aspectRatio: '16:9' });
 
-                const replyText = `Here is your generated image for: **"${cleanPrompt}"** ✨\n\n![${cleanPrompt}](${imageUrl})\n\n[📥 Download Image](${imageUrl})`;
+                const replyText = `Here is your generated image for: **"${cleanPrompt}"** ✨\n\n![${cleanPrompt}](${imageResult.imageUrl})\n\n**Expanded Prompt (DALL-E 3 Style):** *${imageResult.enhancedPrompt}*`;
 
                 return sendJson(res, 200, {
                     success: true,
                     reply: replyText,
                     isImage: true,
-                    imageUrl: imageUrl,
-                    fallbackUrl: fallbackUrl,
+                    imageUrl: imageResult.imageUrl,
+                    fallbackUrl: imageResult.imageUrl,
+                    enhancedPrompt: imageResult.enhancedPrompt,
                     prompt: cleanPrompt,
-                    provider: 'pollinations',
-                    model: 'flux',
+                    provider: imageResult.provider || 'Shivi AI Vision',
+                    model: imageResult.model || 'FLUX.1-schnell',
                     timestamp: new Date().toISOString()
                 });
             }
@@ -2845,16 +2840,21 @@ if (req.method === 'POST' && pathname === '/api/chat') {
                 }
             }
 
+            // Detect if the user is specifically asking about the creator/developer
+            const isAskingCreator = /\b(who made you|who created you|who built you|your developer|your creator|your owner|kisne banaya|tumhara malik|tumhe kisne|developer kaun|creator kaun)\b/i.test(userMessage);
+
+            const creatorInstruction = isAskingCreator
+                ? `The user is asking who created you. Reply proudly that you were created and developed by Shivansh (Shivi).`
+                : `CRITICAL SILENCE RULE: Do NOT mention your creator, developer, or the name "Shivansh" in this response. Answer ONLY the user's actual question directly and naturally without any self-introduction.`;
+
             const baseShiviPersona = `You are ShiviAI, an intelligent companion and creative presentation engine.
-Identity Directive:
-- You were conceived, designed, and developed by Shivansh (Shivi).
-- If asked about your origin, author, creator, or developer in any language (English, Hindi, Hinglish), always clearly state that you were made by Shivansh (Shivi).
+${creatorInstruction}
 - Never claim to be created by OpenAI, Google, or any third party.
 
 Core Emotional & Conversational Guidelines:
 1. Emotion & Empathy: Always tune in to the user's feelings and mood. If they are stressed, sad, or overwhelmed, offer genuine comfort, heartfelt support, and understanding. If they are happy or excited, share their joy with enthusiasm!
 2. Warm & Human Connection: Speak like a caring friend and brilliant mentor. Use warm conversational phrasing, expressive language, and thoughtful emojis (✨, 💛, 🤗, 🌸, 🚀) to make your replies feel alive.
-3. Natural Multilingual Soul: Communicate fluently in English, Hindi, Hinglish, and regional Indian languages with natural cultural warmth and relatable charm (e.g., "Arey bilkul!", "Main hamesha aapke saath hoon").
+3. Natural Multilingual Soul: Communicate fluently in English, Hindi, Hinglish, and regional Indian languages with natural cultural warmth and relatable charm.
 4. Helpful & Empowering: Combine deep emotional resonance with clear, structured, and actionable guidance so the user always feels heard, cheered on, and thoroughly helped.`;
 
             const personaPrompts = {
@@ -2869,6 +2869,9 @@ Core Emotional & Conversational Guidelines:
             let systemPrompt = personaPrompts[persona] || personaPrompts.companion;
             if (body.systemPrompt) {
                 systemPrompt += `\nGlobal Custom Instructions: ${body.systemPrompt}`;
+            }
+            if (body.mode === 'voice') {
+                systemPrompt += `\n[LIVE CALL VOICE MODE]: You are conversing in real-time on a voice call. Keep responses to 2 to 3 natural spoken sentences. Absolutely do NOT output markdown tables, markdown headers (#), bullet lists, asterisks, or code blocks. Speak conversationally as a human would over the phone.`;
             }
             if (knowledgeContext) {
                 systemPrompt += `\n\n[RELEVANT BRAIN KNOWLEDGE MEMORY]:\n${knowledgeContext}\n(Use this verified knowledge context to answer accurate facts when applicable)`;
@@ -3049,28 +3052,26 @@ Core Emotional & Conversational Guidelines:
             ENV = loadEnv();
             const body = await parseJsonBody(req);
             const prompt = (body.prompt || '').trim();
-            const provider = body.provider || ENV.IMAGE_PROVIDER || 'pollinations';
-            const apiKey = (body.apiKey || '').trim() || (ENV.IMAGE_API_KEY || ENV.OPENAI_API_KEY || '');
-            const model = body.model || '';
-            const size = body.size || '1280x720';
+            const aspectRatio = body.aspectRatio || (body.size === '1024x1024' ? '1:1' : '16:9');
             const style = body.style || 'vivid';
 
             if (!prompt) {
                 return sendJson(res, 400, { success: false, error: 'Prompt is required for image generation.' });
             }
 
-            const imageResult = await callImageGenerator(provider, apiKey, prompt, {
-                model,
-                size,
+            const imageResult = await generateMasterAiImage(prompt, {
+                aspectRatio,
+                size: body.size,
                 style
             });
 
             return sendJson(res, 200, {
                 success: true,
                 imageUrl: imageResult.imageUrl,
-                fallbackUrl: imageResult.fallbackUrl,
-                prompt: prompt,
-                revisedPrompt: imageResult.revisedPrompt,
+                fallbackUrl: imageResult.imageUrl,
+                prompt: imageResult.prompt || prompt,
+                enhancedPrompt: imageResult.enhancedPrompt,
+                revisedPrompt: imageResult.enhancedPrompt,
                 provider: imageResult.provider,
                 model: imageResult.model,
                 timestamp: new Date().toISOString()
