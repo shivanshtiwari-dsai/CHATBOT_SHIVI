@@ -14,7 +14,12 @@ Features:
 =============================================================================
 """
 
-from PIL.Image import logger
+import logging
+import traceback
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+logger = logging.getLogger("shivi_ai")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 import os
 import re
 import sys
@@ -54,16 +59,39 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 # Workspace & Directory Setup
 # ---------------------------------------------------------------------------
-ROOT_DIR = Path(__file__).parent.resolve()
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = Path(BASE_DIR).resolve()
 ENV_PATH = ROOT_DIR / ".env"
 KNOWLEDGE_PATH = ROOT_DIR / "knowledge.json"
-IMAGES_DIR = ROOT_DIR / "generated_images"
-IMAGES_DIR.mkdir(parents=True, exist_ok=True)
-USERS_PATH = ROOT_DIR / "users.json"
+
+IS_VERCEL = bool(os.getenv("VERCEL"))
+if IS_VERCEL:
+    IMAGES_DIR = Path("/tmp/generated_images")
+    USERS_PATH = Path("/tmp/users.json")
+    DOWNLOADS_DIR = Path("/tmp/downloads")
+else:
+    IMAGES_DIR = ROOT_DIR / "generated_images"
+    USERS_PATH = ROOT_DIR / "users.json"
+    DOWNLOADS_DIR = ROOT_DIR / "downloads"
+
+try:
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+except Exception as e:
+    logger.warning(f"[Storage Init Warning]: {e}")
+
+try:
+    DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+except Exception as e:
+    logger.warning(f"[Storage Init Warning]: {e}")
+
 AUTH_SECRET = os.getenv("AUTH_SECRET", "shivi_ai_secure_token_secret_key_2026")
 
-# Load environment variables
-load_dotenv(dotenv_path=ENV_PATH)
+# Load environment variables safely
+if ENV_PATH.exists():
+    try:
+        load_dotenv(dotenv_path=ENV_PATH)
+    except Exception as e:
+        logger.warning(f"[Env Load Warning]: {e}")
 
 import hashlib
 import hmac
@@ -75,7 +103,8 @@ def hash_password_py(password: str, salt: str) -> str:
     return hashlib.pbkdf2_hmac("sha512", password.encode("utf-8"), salt.encode("utf-8"), 10000).hex()
 
 def load_users_py() -> List[Dict[str, Any]]:
-    if not USERS_PATH.exists():
+    read_path = USERS_PATH if USERS_PATH.exists() else (ROOT_DIR / "users.json")
+    if not read_path.exists():
         salt = secrets.token_hex(16)
         default_users = [{
             "id": "usr_demo_01",
@@ -91,13 +120,13 @@ def load_users_py() -> List[Dict[str, Any]]:
             with open(USERS_PATH, "w", encoding="utf-8") as f:
                 json.dump(default_users, f, indent=2)
         except Exception as e:
-            print(f"[Auth Init Warning]: {e}")
+            logger.warning(f"[Auth Init Warning]: {e}")
         return default_users
     try:
-        with open(USERS_PATH, "r", encoding="utf-8") as f:
+        with open(read_path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception as e:
-        print(f"[Auth Load Warning]: {e}")
+        logger.warning(f"[Auth Load Warning]: {e}")
         return []
 
 def save_users_py(users: List[Dict[str, Any]]) -> bool:
@@ -106,7 +135,7 @@ def save_users_py(users: List[Dict[str, Any]]) -> bool:
             json.dump(users, f, indent=2)
         return True
     except Exception as e:
-        print(f"[Auth Save Error]: {e}")
+        logger.warning(f"[Auth Save Error]: {e}")
         return False
 
 def create_auth_token_py(user: Dict[str, Any], expires_in_days: int = 7) -> str:
@@ -143,25 +172,90 @@ def verify_auth_token_py(token: str) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
 
+# ---------------------------------------------------------------------------
+# MongoDB Database Initialization (Non-blocking / Resilient)
+# ---------------------------------------------------------------------------
+mongo_client: Any = None
+async_mongo_client: Any = None
+db: Any = None
+async_db: Any = None
+
+MONGO_URI = os.getenv("MONGODB_URI") or os.getenv("MONGO_URI", "")
+
+def get_sync_mongo():
+    global mongo_client, db
+    if db is not None:
+        return db
+    if not MONGO_URI:
+        return None
+    try:
+        from pymongo import MongoClient
+        mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=4000, connect=False)
+        db = mongo_client.get_default_database()
+        logger.info("[MongoDB] Connected successfully to MongoDB via pymongo.")
+        return db
+    except Exception as e:
+        logger.warning(f"[MongoDB] Sync connection failed (resilient fallback active): {e}")
+        mongo_client = None
+        db = None
+        return None
+
+async def get_async_mongo():
+    global async_mongo_client, async_db
+    if async_db is not None:
+        return async_db
+    if not MONGO_URI:
+        return None
+    try:
+        from motor.motor_asyncio import AsyncIOMotorClient
+        async_mongo_client = AsyncIOMotorClient(MONGO_URI, serverSelectionTimeoutMS=4000)
+        async_db = async_mongo_client.get_default_database()
+        logger.info("[MongoDB] Connected successfully to MongoDB via motor.")
+        return async_db
+    except Exception as e:
+        logger.warning(f"[MongoDB] Async connection failed (resilient fallback active): {e}")
+        async_mongo_client = None
+        async_db = None
+        return None
+
+def get_port() -> int:
+    try:
+        return int(os.getenv("PORT", "5500"))
+    except ValueError:
+        return 5500
+
 # Global Async HTTP Client (re-used for high-concurrency connection pooling)
 http_client: Optional[httpx.AsyncClient] = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global http_client
-    limits = httpx.Limits(max_keepalive_connections=20, max_connections=50)
-    timeout = httpx.Timeout(45.0, connect=10.0)
-    http_client = httpx.AsyncClient(limits=limits, timeout=timeout)
-    print("\n" + "=" * 62)
-    print("🚀 SHIVI AI — HIGH-PERFORMANCE PYTHON FASTAPI ENGINE ACTIVE")
-    print(f"👉 Local Web URL: http://localhost:{get_port()}")
-    print(f"👉 Images Cache:  {IMAGES_DIR}")
-    print(f"👉 Default AI:    {os.getenv('DEFAULT_PROVIDER', 'auto').upper()}")
-    print("=" * 62 + "\n")
+    try:
+        limits = httpx.Limits(max_keepalive_connections=20, max_connections=50)
+        timeout = httpx.Timeout(45.0, connect=10.0)
+        http_client = httpx.AsyncClient(limits=limits, timeout=timeout)
+    except Exception as e:
+        logger.warning(f"[Lifespan Init Warning] HTTP Client init: {e}")
+        http_client = None
+
+    try:
+        await get_async_mongo()
+    except Exception as e:
+        logger.warning(f"[Lifespan Init Warning] MongoDB init: {e}")
+
+    logger.info("🚀 SHIVI AI — HIGH-PERFORMANCE PYTHON FASTAPI ENGINE ACTIVE")
     yield
     if http_client:
-        await http_client.aclose()
-    print("[Shivi AI] Engine cleanly shut down.")
+        try:
+            await http_client.aclose()
+        except Exception:
+            pass
+    if async_mongo_client:
+        try:
+            async_mongo_client.close()
+        except Exception:
+            pass
+    logger.info("[Shivi AI] Engine cleanly shut down.")
 
 # ---------------------------------------------------------------------------
 # App Initialization
@@ -182,13 +276,36 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
+# Global Exception Handlers (Prevent Serverless Worker 500 Dropouts)
+# ---------------------------------------------------------------------------
+@app.exception_handler(StarletteHTTPException)
+async def custom_http_exception_handler(request: Request, exc: StarletteHTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "success": False,
+            "status_code": exc.status_code,
+            "detail": exc.detail
+        }
+    )
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    err_tb = traceback.format_exc()
+    logger.error(f"[Unhandled Server Error] {request.method} {request.url.path}: {exc}\n{err_tb}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "success": False,
+            "error": "Internal Server Error",
+            "message": str(exc),
+            "path": request.url.path
+        }
+    )
+
+# ---------------------------------------------------------------------------
 # Helper: Environment Configuration Loader & Saver
 # ---------------------------------------------------------------------------
-def get_port() -> int:
-    try:
-        return int(os.getenv("PORT", "5500"))
-    except ValueError:
-        return 5500
 
 def load_env_dict() -> Dict[str, str]:
     """Parses .env file directly to maintain real-time sync."""
@@ -258,8 +375,11 @@ def save_env_dict(updates: Dict[str, str]) -> Dict[str, str]:
         ""
     ]
 
-    with open(ENV_PATH, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+    try:
+        with open(ENV_PATH, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+    except Exception as e:
+        logger.warning(f"[Env Save Warning] Could not persist .env to disk: {e}")
 
     for k, v in current.items():
         os.environ[k] = str(v)
@@ -656,29 +776,47 @@ async def call_gemini(api_key: str, model: str, system_prompt: str, user_msg: st
 # ---------------------------------------------------------------------------
 async def download_image_task(url: str, filepath: Path):
     """Asynchronously downloads image in the background without blocking the client."""
+    client = http_client
+    should_close = False
+    if client is None:
+        client = httpx.AsyncClient(timeout=30.0)
+        should_close = True
     try:
-        assert http_client is not None
-        res = await http_client.get(url, timeout=30.0)
-        if res.status_code == 200 and len(res.content) > 1000:
-            with open(filepath, "wb") as f:
-                f.write(res.content)
-            print(f"[Image Engine] Successfully cached: {filepath.name}")
-            return
-    except Exception as e:
-        print(f"[Image Engine Warning] Could not cache primary image {url}: {e}")
-
-    # Fallback to turbo model if primary (e.g. flux) timed out
-    if "model=flux" in url:
         try:
-            fallback_url = url.replace("model=flux", "model=turbo")
-            assert http_client is not None
-            res = await http_client.get(fallback_url, timeout=15.0)
+            res = await client.get(url, timeout=30.0)
             if res.status_code == 200 and len(res.content) > 1000:
-                with open(filepath, "wb") as f:
-                    f.write(res.content)
-                print(f"[Image Engine] Successfully cached via turbo fallback: {filepath.name}")
-        except Exception as e2:
-            print(f"[Image Engine Error] Fallback download failed: {e2}")
+                try:
+                    filepath.parent.mkdir(parents=True, exist_ok=True)
+                    with open(filepath, "wb") as f:
+                        f.write(res.content)
+                    logger.info(f"[Image Engine] Successfully cached: {filepath.name}")
+                except Exception as fe:
+                    logger.warning(f"[Image Engine Warning] Disk cache write skipped: {fe}")
+                return
+        except Exception as e:
+            logger.warning(f"[Image Engine Warning] Could not cache primary image {url}: {e}")
+
+        # Fallback to turbo model if primary (e.g. flux) timed out
+        if "model=flux" in url:
+            try:
+                fallback_url = url.replace("model=flux", "model=turbo")
+                res = await client.get(fallback_url, timeout=15.0)
+                if res.status_code == 200 and len(res.content) > 1000:
+                    try:
+                        filepath.parent.mkdir(parents=True, exist_ok=True)
+                        with open(filepath, "wb") as f:
+                            f.write(res.content)
+                        logger.info(f"[Image Engine] Successfully cached via turbo fallback: {filepath.name}")
+                    except Exception as fe:
+                        logger.warning(f"[Image Engine Warning] Fallback disk cache write skipped: {fe}")
+            except Exception as e2:
+                logger.error(f"[Image Engine Error] Fallback download failed: {e2}")
+    finally:
+        if should_close:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
 
 # ---------------------------------------------------------------------------
 # API Routes
@@ -2206,8 +2344,11 @@ def create_pptx_file_py(deck: dict) -> dict:
             except Exception:
                 pass
 
-    downloads_dir = ROOT_DIR / "downloads"
-    downloads_dir.mkdir(parents=True, exist_ok=True)
+    downloads_dir = DOWNLOADS_DIR
+    try:
+        downloads_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
 
     safe_title = re.sub(r'[^a-zA-Z0-9_\-]', '_', deck_title[:25]).strip('_') or "presentation"
     filename = f"{safe_title}_{int(time.time())}.pptx"
@@ -2686,45 +2827,79 @@ async def query_knowledge(req: KnowledgeQueryRequest):
     return {"results": results}
 
 # ---------------------------------------------------------------------------
-# Static File Mounts & SPA Fallback
+# Static File Mounts & SPA Fallback (Hardened for Vercel Serverless)
 # ---------------------------------------------------------------------------
-# Mount generated images
-app.mount("/generated_images", StaticFiles(directory=str(IMAGES_DIR)), name="generated_images")
+# Mount generated images if directory exists
+try:
+    if not IMAGES_DIR.exists():
+        IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    app.mount("/generated_images", StaticFiles(directory=str(IMAGES_DIR)), name="generated_images")
+except Exception as e:
+    logger.warning(f"[Static Mount Warning] Could not mount /generated_images: {e}")
 
-# Serve index.html at root
+# Explicit favicon route - returns 204 (No Content) if missing, preventing 500 crashes
+@app.get("/favicon.ico")
+async def favicon():
+    favicon_path = os.path.join(BASE_DIR, "favicon.ico")
+    if os.path.exists(favicon_path) and os.path.isfile(favicon_path):
+        return FileResponse(favicon_path, media_type="image/x-icon")
+    return Response(status_code=204)
+
+# Serve index.html at root using BASE_DIR
 @app.get("/")
 async def serve_index():
-    index_file = ROOT_DIR / "index.html"
-    if index_file.exists():
-        return FileResponse(index_file, media_type="text/html")
-    return JSONResponse({"error": "index.html not found in project root"}, status_code=404)
+    try:
+        index_file = os.path.join(BASE_DIR, "index.html")
+        if os.path.exists(index_file) and os.path.isfile(index_file):
+            return FileResponse(index_file, media_type="text/html")
+        return JSONResponse({"status": "healthy", "service": "Shivi AI Backend", "notice": "index.html not found"}, status_code=200)
+    except Exception as e:
+        logger.error(f"[Frontend Serve Error]: {e}")
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 # Static file handler for application assets (style.css, app.js, brain.js, knowledge.json, etc.)
 @app.get("/{file_path:path}")
 async def serve_static(file_path: str):
-    target = (ROOT_DIR / file_path).resolve()
-    # Path traversal protection
-    if not str(target).startswith(str(ROOT_DIR)):
-        raise HTTPException(status_code=403, detail="Access forbidden")
+    try:
+        if file_path == "favicon.ico":
+            return Response(status_code=204)
 
-    if target.is_file():
-        mime_types = {
-            ".html": "text/html; charset=utf-8",
-            ".css": "text/css; charset=utf-8",
-            ".js": "application/javascript; charset=utf-8",
-            ".json": "application/json; charset=utf-8",
-            ".svg": "image/svg+xml",
-            ".png": "image/png",
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".ico": "image/x-icon",
-            ".webp": "image/webp",
-            ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        }
-        media_type = mime_types.get(target.suffix.lower(), "application/octet-stream")
-        return FileResponse(target, media_type=media_type)
+        # First check in ROOT_DIR
+        target = (ROOT_DIR / file_path).resolve()
 
-    raise HTTPException(status_code=404, detail="File not found")
+        # Check /tmp for generated downloads/images if running on Vercel
+        if IS_VERCEL and not target.is_file():
+            tmp_target = (Path("/tmp") / file_path).resolve()
+            if str(tmp_target).startswith("/tmp") and tmp_target.is_file():
+                target = tmp_target
+
+        # Path traversal protection
+        if not str(target).startswith(str(ROOT_DIR)) and not (IS_VERCEL and str(target).startswith("/tmp")):
+            raise HTTPException(status_code=403, detail="Access forbidden")
+
+        if target.is_file():
+            mime_types = {
+                ".html": "text/html; charset=utf-8",
+                ".css": "text/css; charset=utf-8",
+                ".js": "application/javascript; charset=utf-8",
+                ".json": "application/json; charset=utf-8",
+                ".svg": "image/svg+xml",
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".ico": "image/x-icon",
+                ".webp": "image/webp",
+                ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            }
+            media_type = mime_types.get(target.suffix.lower(), "application/octet-stream")
+            return FileResponse(str(target), media_type=media_type)
+
+        raise HTTPException(status_code=404, detail="File not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[Static Serve Error] {file_path}: {e}")
+        raise HTTPException(status_code=404, detail="File not found")
 
 # ---------------------------------------------------------------------------
 # Server Entrypoint
