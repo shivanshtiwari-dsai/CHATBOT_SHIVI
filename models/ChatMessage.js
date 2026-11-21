@@ -51,6 +51,22 @@ const ChatMessageSchema = new mongoose.Schema({
         type: [mongoose.Schema.Types.Mixed],
         default: []
     },
+    type: {
+        type: String,
+        default: 'text'
+    },
+    pptData: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null
+    },
+    deckData: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null
+    },
+    imageData: {
+        type: mongoose.Schema.Types.Mixed,
+        default: null
+    },
     isImage: {
         type: Boolean,
         default: false

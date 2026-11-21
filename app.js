@@ -263,7 +263,7 @@
         if (!sessionId || !message) return;
         try {
             const user = state.auth.user;
-            await fetch('/api/chats/message', {
+            const res = await fetch('/api/chats/message', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -277,6 +277,14 @@
                     message: message
                 })
             });
+            if (res.ok) {
+                const data = await res.json();
+                if (data.conversationId && (!state.currentSessionId || state.currentSessionId.startsWith('temp_'))) {
+                    state.currentSessionId = data.conversationId;
+                    const cur = getCurrentSession();
+                    if (cur) cur.id = data.conversationId;
+                }
+            }
         } catch (err) {
             console.warn('[MongoDB] Save message notice:', err.message);
         }
@@ -286,8 +294,8 @@
         try {
             const user = state.auth.user;
             const email = user ? user.email : '';
+            const userId = user ? (user.id || user._id || user.email) : '';
             const token = state.auth.token;
-            if (!email && !token) return;
 
             await fetch('/api/users/preferences', {
                 method: 'PATCH',
@@ -297,7 +305,8 @@
                 },
                 body: JSON.stringify({
                     email: email,
-                    userId: user ? (user.id || user.email) : '',
+                    userId: userId,
+                    _id: user ? user._id : undefined,
                     ...prefs
                 })
             });
@@ -2532,11 +2541,20 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
 
         // 1. First, attempt calling the backend server endpoint (/api/chat)
         try {
+            const user = state.auth && state.auth.user;
+            const token = state.auth && state.auth.token;
             const serverRes = await fetch('/api/chat', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+                },
                 body: JSON.stringify({
                     message: userText,
+                    sessionId: state.currentSessionId,
+                    conversationId: state.currentSessionId,
+                    userId: user ? (user.id || user._id || user.email) : 'guest',
+                    userEmail: user ? user.email : '',
                     history: history,
                     provider: provider,
                     apiKey: key,
@@ -2556,6 +2574,11 @@ ${knowledgeContext ? `\n[RELEVANT BRAIN KNOWLEDGE CONTEXT]:\n${knowledgeContext}
             if (serverRes.ok) {
                 const serverData = await serverRes.json();
                 if (serverData.success && serverData.reply) {
+                    if (serverData.conversationId && (!state.currentSessionId || state.currentSessionId.startsWith('temp_'))) {
+                        state.currentSessionId = serverData.conversationId;
+                        const cur = getCurrentSession();
+                        if (cur) cur.id = serverData.conversationId;
+                    }
                     return serverData.reply;
                 }
             }

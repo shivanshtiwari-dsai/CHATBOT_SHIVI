@@ -2430,15 +2430,37 @@ const server = http.createServer(async (req, res) => {
             const userEmail = authUser ? authUser.email : (body.userEmail || '');
             const message = body.message || body;
 
+            // Support direct dual-turn persistence { userMessage, botMessage, type, pptData, imageUrl }
+            if (body.userMessage || body.botMessage) {
+                const confirmedId = await storage.persistConversationToMongo({
+                    conversationId: sessionId,
+                    userEmail: userEmail,
+                    userId: userId,
+                    title: body.title,
+                    userMessage: body.userMessage,
+                    botMessage: body.botMessage,
+                    type: body.type || 'text',
+                    pptData: body.pptData,
+                    imageUrl: body.imageUrl,
+                    attachments: body.attachments
+                });
+                return sendJson(res, 200, {
+                    success: true,
+                    conversationId: confirmedId,
+                    sessionId: confirmedId
+                });
+            }
+
             if (!sessionId) {
                 return sendJson(res, 400, { success: false, error: 'sessionId or conversationId is required.' });
             }
 
             const result = await storage.appendMessageToSession(sessionId, message, userId, userEmail);
+            const confirmedId = result.conversationId || sessionId;
             return sendJson(res, 200, {
                 success: true,
-                conversationId: sessionId,
-                sessionId: sessionId,
+                conversationId: confirmedId,
+                sessionId: confirmedId,
                 ...result
             });
         } catch (err) {
@@ -2680,6 +2702,12 @@ if (req.method === 'POST' && pathname === '/api/chat') {
             const persona = body.persona || 'companion';
             const knowledgeContext = body.knowledgeContext || '';
 
+            // Extract user credentials and conversation session ID
+            const authUser = getAuthenticatedUser(req);
+            const userEmail = (authUser && authUser.email) || body.userEmail || body.email || (body.userId && body.userId.includes('@') ? body.userId : '') || '';
+            const userId = (authUser && authUser.sub) || body.userId || userEmail || 'guest';
+            let conversationId = body.conversationId || body.sessionId || null;
+
             // Process and inject attached files into context if not already present
             if (attachments.length > 0 && !userMessage.includes('[USER ATTACHED DOCUMENTS]')) {
                 const attachmentContext = attachments.map((att, idx) => {
@@ -2702,11 +2730,24 @@ if (req.method === 'POST' && pathname === '/api/chat') {
             // LAYER 1: DETERMINISTIC IDENTITY INTERCEPTOR (100% RELIABLE OVERRIDE)
             // ----------------------------------------------------
             if (isIdentityQuery(body.message || userMessage)) {
+                let savedConvId = conversationId;
+                if (userEmail || conversationId) {
+                    savedConvId = await storage.persistConversationToMongo({
+                        conversationId,
+                        userEmail,
+                        userId,
+                        userMessage,
+                        botMessage: IDENTITY_DIRECT_REPLY,
+                        type: 'text'
+                    });
+                }
                 return sendJson(res, 200, {
                     success: true,
                     reply: IDENTITY_DIRECT_REPLY,
                     provider: 'builtin',
                     model: 'identity-interceptor',
+                    conversationId: savedConvId || conversationId,
+                    sessionId: savedConvId || conversationId,
                     timestamp: new Date().toISOString()
                 });
             }
@@ -2736,6 +2777,19 @@ if (req.method === 'POST' && pathname === '/api/chat') {
 
                 const replyText = `Here is your generated image for: **"${cleanPrompt}"** ✨\n\n![${cleanPrompt}](${imageResult.imageUrl})\n\n**Expanded Prompt (DALL-E 3 Style):** *${imageResult.enhancedPrompt}*`;
 
+                let savedConvId = conversationId;
+                if (userEmail || conversationId) {
+                    savedConvId = await storage.persistConversationToMongo({
+                        conversationId,
+                        userEmail,
+                        userId,
+                        userMessage,
+                        botMessage: replyText,
+                        type: 'image',
+                        imageUrl: imageResult.imageUrl
+                    });
+                }
+
                 return sendJson(res, 200, {
                     success: true,
                     reply: replyText,
@@ -2746,6 +2800,8 @@ if (req.method === 'POST' && pathname === '/api/chat') {
                     prompt: cleanPrompt,
                     provider: imageResult.provider || 'Shivi AI Vision',
                     model: imageResult.model || 'FLUX.1-schnell',
+                    conversationId: savedConvId || conversationId,
+                    sessionId: savedConvId || conversationId,
                     timestamp: new Date().toISOString()
                 });
             }
@@ -2813,6 +2869,20 @@ if (req.method === 'POST' && pathname === '/api/chat') {
                     `---\n\n` +
                     `📥 **[Download Presentation (.pptx)](${fileInfo.downloadUrl})**`;
 
+                let savedConvId = conversationId;
+                if (userEmail || conversationId) {
+                    savedConvId = await storage.persistConversationToMongo({
+                        conversationId,
+                        userEmail,
+                        userId,
+                        title: deck.title || deck.deck_title || topic,
+                        userMessage,
+                        botMessage: replyText,
+                        type: 'ppt',
+                        pptData: deck
+                    });
+                }
+
                 return sendJson(res, 200, {
                     success: true,
                     reply: replyText,
@@ -2820,6 +2890,8 @@ if (req.method === 'POST' && pathname === '/api/chat') {
                     downloadUrl: fileInfo.downloadUrl,
                     filename: fileInfo.filename,
                     deck: deck,
+                    conversationId: savedConvId || conversationId,
+                    sessionId: savedConvId || conversationId,
                     timestamp: new Date().toISOString()
                 });
             }
@@ -2992,22 +3064,21 @@ Core Emotional & Conversational Guidelines:
                 result = await tryBrain();
             }
 
-            if (body.sessionId) {
-                const authUser = getAuthenticatedUser(req);
-                const uId = authUser ? authUser.sub : (body.userId || 'guest');
-                const uEmail = authUser ? authUser.email : (body.userEmail || '');
-                storage.appendMessageToSession(body.sessionId, {
-                    role: 'user',
-                    content: userMessage,
-                    attachments: attachments
-                }, uId, uEmail).catch(() => {});
-                storage.appendMessageToSession(body.sessionId, {
-                    role: 'assistant',
-                    content: result.reply,
-                    provider: result.provider,
-                    model: result.model,
-                    persona: persona
-                }, uId, uEmail).catch(() => {});
+            let savedConvId = conversationId;
+            if (userEmail || conversationId) {
+                try {
+                    savedConvId = await storage.persistConversationToMongo({
+                        conversationId,
+                        userEmail,
+                        userId,
+                        userMessage,
+                        botMessage: result.reply,
+                        type: 'text',
+                        attachments
+                    });
+                } catch (persistErr) {
+                    console.warn('[Storage] persistConversationToMongo notice:', persistErr.message);
+                }
             }
 
             return sendJson(res, 200, {
@@ -3015,6 +3086,8 @@ Core Emotional & Conversational Guidelines:
                 reply: result.reply,
                 provider: result.provider,
                 model: result.model,
+                conversationId: savedConvId || conversationId,
+                sessionId: savedConvId || conversationId,
                 webSearchUsed: webSearchTriggered,
                 timestamp: new Date().toISOString()
             });
@@ -3034,11 +3107,24 @@ Core Emotional & Conversational Guidelines:
                 if (brainRes && brainRes.reply) fallbackReply = brainRes.reply;
             } catch (_) {}
 
+            if (userEmail || conversationId) {
+                storage.persistConversationToMongo({
+                    conversationId,
+                    userEmail,
+                    userId,
+                    userMessage,
+                    botMessage: fallbackReply,
+                    type: 'text'
+                }).catch(() => {});
+            }
+
             return sendJson(res, 200, {
                 success: true,
                 reply: fallbackReply,
                 provider: 'builtin',
                 model: 'shivi-resilient-brain',
+                conversationId: conversationId,
+                sessionId: conversationId,
                 timestamp: new Date().toISOString()
             });
         }

@@ -10,7 +10,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { isMongoConnected, getConnectionStatus, mongoose } = require('../config/db.js');
-const { User, ChatSession, ChatMessage, PptDeck } = require('../models/index.js');
+const { User, ChatSession, Conversation, ChatMessage, PptDeck } = require('../models/index.js');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 const USERS_PATH = path.join(ROOT_DIR, 'users.json');
@@ -290,9 +290,19 @@ async function syncUserProfile(userData) {
 async function updateUserPreferences(idOrEmail, preferences) {
     if (!idOrEmail || !preferences) return null;
     const cleanKey = String(idOrEmail).trim();
-    const query = cleanKey.includes('@') ? { email: cleanKey.toLowerCase() } : { $or: [{ id: cleanKey }, { email: cleanKey.toLowerCase() }] };
-    const updates = {};
+    const isHex24 = /^[0-9a-fA-F]{24}$/.test(cleanKey);
+    const isObjId = isHex24 && mongoose.Types.ObjectId.isValid(cleanKey);
 
+    let query = {};
+    if (cleanKey.includes('@')) {
+        query = { email: cleanKey.toLowerCase() };
+    } else if (isObjId) {
+        query = { $or: [{ _id: new mongoose.Types.ObjectId(cleanKey) }, { id: cleanKey }, { email: cleanKey.toLowerCase() }] };
+    } else {
+        query = { $or: [{ id: cleanKey }, { email: cleanKey.toLowerCase() }] };
+    }
+
+    const updates = {};
     const chosenTheme = preferences.themePreference || preferences.theme;
     if (chosenTheme) {
         updates.themePreference = chosenTheme;
@@ -304,11 +314,29 @@ async function updateUserPreferences(idOrEmail, preferences) {
     }
     if (preferences.font) updates['settings.font'] = preferences.font;
     if (preferences.persona) updates['settings.persona'] = preferences.persona;
+    if (preferences.speechRate !== undefined) updates['settings.speechRate'] = preferences.speechRate;
+    if (preferences.sfxVolume !== undefined) updates['settings.sfxVolume'] = preferences.sfxVolume;
+    if (preferences.sfxEnabled !== undefined) updates['settings.sfxEnabled'] = preferences.sfxEnabled;
+    if (preferences.brainProvider) updates['settings.brainProvider'] = preferences.brainProvider;
+    if (preferences.systemInstructions !== undefined) updates['settings.systemInstructions'] = preferences.systemInstructions;
 
     if (isMongoConnected()) {
         try {
-            const updated = await User.findOneAndUpdate(query, { $set: updates }, { returnDocument: 'after' });
-            if (updated) return updated.toSafeJSON();
+            const fallbackEmail = cleanKey.includes('@') ? cleanKey.toLowerCase() : ((preferences.email || cleanKey) + '@shiviai.local');
+            const updated = await User.findOneAndUpdate(
+                query,
+                {
+                    $set: updates,
+                    $setOnInsert: {
+                        id: cleanKey,
+                        email: fallbackEmail,
+                        name: cleanKey.split('@')[0] || 'Explorer',
+                        provider: 'universal'
+                    }
+                },
+                { returnDocument: 'after', upsert: true }
+            );
+            if (updated) return updated.toSafeJSON ? updated.toSafeJSON() : updated;
         } catch (err) {
             console.error('[Storage] MongoDB updateUserPreferences error:', err.message);
         }
@@ -381,11 +409,21 @@ async function getSessionById(sessionId) {
     if (!sessionId) return null;
     if (isMongoConnected()) {
         try {
-            const session = await ChatSession.findOne({ id: sessionId }).lean();
+            const cleanId = String(sessionId).trim();
+            const isHex24 = /^[0-9a-fA-F]{24}$/.test(cleanId);
+            const isObjId = isHex24 && mongoose.Types.ObjectId.isValid(cleanId);
+
+            const query = isObjId
+                ? { $or: [{ _id: new mongoose.Types.ObjectId(cleanId) }, { id: cleanId }] }
+                : { id: cleanId };
+
+            const ConvModel = Conversation || ChatSession;
+            const session = await ConvModel.findOne(query).lean();
             if (session) {
                 return {
-                    id: session.id,
-                    conversationId: session.id,
+                    id: session.id || (session._id ? session._id.toString() : cleanId),
+                    _id: session._id ? session._id.toString() : undefined,
+                    conversationId: session.id || (session._id ? session._id.toString() : cleanId),
                     title: session.title || 'Untitled Conversation',
                     currentPersona: session.currentPersona || 'companion',
                     pinned: !!session.pinned,
@@ -397,9 +435,11 @@ async function getSessionById(sessionId) {
                         content: m.content,
                         timestamp: m.timestamp,
                         createdAt: m.createdAt,
-                        type: m.type,
-                        deck: m.deck,
-                        imageUrl: m.imageUrl
+                        type: m.type || (m.isPresentation ? 'ppt' : (m.isImage ? 'image' : 'text')),
+                        deck: m.deck || m.deckData || m.pptData,
+                        pptData: m.pptData || m.deckData || m.deck,
+                        imageUrl: m.imageUrl || (m.imageData && m.imageData.imageUrl),
+                        imageData: m.imageData
                     }))
                 };
             }
@@ -466,9 +506,22 @@ async function appendMessageToSession(sessionId, message, userId = 'guest', user
 
     if (isMongoConnected()) {
         try {
+            const cleanId = String(sessionId).trim();
+            const isHex24 = /^[0-9a-fA-F]{24}$/.test(cleanId);
+            const isObjId = isHex24 && mongoose.Types.ObjectId.isValid(cleanId);
+
+            const filter = isObjId
+                ? { $or: [{ _id: new mongoose.Types.ObjectId(cleanId) }, { id: cleanId }] }
+                : { id: cleanId };
+
+            const rawImgUrl = message.imageUrl || (message.imageData && message.imageData.imageUrl) || '';
+            const rawDeck = message.deck || message.deckData || message.pptData || null;
+            const isPpt = !!(message.isPresentation || message.type === 'ppt' || rawDeck);
+            const isImg = !!(message.isImage || message.type === 'image' || rawImgUrl);
+
             const formattedMsg = {
-                id: message.id || ('msg_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 6)),
-                sessionId: sessionId,
+                id: message.id || ('msg_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7)),
+                sessionId: cleanId,
                 userId: effectiveUserId,
                 role: message.role || 'user',
                 content: message.content || '',
@@ -477,22 +530,28 @@ async function appendMessageToSession(sessionId, message, userId = 'guest', user
                 model: message.model || '',
                 persona: message.persona || 'companion',
                 attachments: Array.isArray(message.attachments) ? message.attachments : [],
-                isImage: !!message.isImage,
-                imageUrl: message.imageUrl || '',
-                fallbackUrl: message.fallbackUrl || '',
+                type: message.type || (isPpt ? 'ppt' : (isImg ? 'image' : 'text')),
+                isImage: isImg,
+                imageUrl: rawImgUrl,
+                fallbackUrl: message.fallbackUrl || rawImgUrl,
+                imageData: message.imageData || (rawImgUrl ? { imageUrl: rawImgUrl } : null),
                 prompt: message.prompt || '',
-                isPresentation: !!message.isPresentation,
-                downloadUrl: message.downloadUrl || '',
-                filename: message.filename || '',
-                deck: message.deck || null
+                isPresentation: isPpt,
+                downloadUrl: message.downloadUrl || (rawDeck && rawDeck.downloadUrl) || '',
+                filename: message.filename || (rawDeck && rawDeck.filename) || '',
+                deck: rawDeck,
+                deckData: rawDeck,
+                pptData: rawDeck
             };
 
-            const updatedSession = await ChatSession.findOneAndUpdate(
-                { id: sessionId },
+            const ConvModel = Conversation || ChatSession;
+            const updatedSession = await ConvModel.findOneAndUpdate(
+                filter,
                 {
                     $push: { messages: formattedMsg },
                     $set: { updatedAt: new Date() },
                     $setOnInsert: {
+                        id: cleanId.startsWith('temp_') ? ('sess_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7)) : cleanId,
                         userId: effectiveUserId,
                         userEmail: effectiveEmail,
                         title: message.role === 'user' && message.content ? String(message.content).slice(0, 35) : 'New Conversation'
@@ -501,26 +560,29 @@ async function appendMessageToSession(sessionId, message, userId = 'guest', user
                 { upsert: true, returnDocument: 'after' }
             );
 
-            if (formattedMsg.isPresentation || message.deck || message.deckData) {
+            if (formattedMsg.isPresentation || rawDeck) {
                 try {
-                    const deckInfo = message.deck || message.deckData || {
+                    const deckInfo = rawDeck || {
                         title: message.filename || 'Presentation',
                         topic: message.prompt || 'Presentation',
                         filename: message.filename || `presentation_${Date.now()}.pptx`,
                         downloadUrl: message.downloadUrl || ''
                     };
-                    await savePptDeck(deckInfo, effectiveUserId, effectiveEmail, sessionId);
+                    await savePptDeck(deckInfo, effectiveUserId, effectiveEmail, cleanId);
                 } catch (deckErr) {
                     console.warn('[Storage] Auto-saving PPT deck notice:', deckErr.message);
                 }
             }
 
+            const confirmedId = updatedSession._id ? updatedSession._id.toString() : (updatedSession.id || cleanId);
             return {
                 success: true,
                 mode: 'mongodb',
                 session: updatedSession,
+                conversationId: confirmedId,
+                sessionId: confirmedId,
                 message: formattedMsg,
-                messageCount: updatedSession.messages.length
+                messageCount: updatedSession.messages ? updatedSession.messages.length : 0
             };
         } catch (err) {
             console.error('[Storage] MongoDB appendMessageToSession error:', err.message);
@@ -529,8 +591,146 @@ async function appendMessageToSession(sessionId, message, userId = 'guest', user
 
     return {
         success: true,
-        mode: 'local_fallback'
+        mode: 'local_fallback',
+        conversationId: sessionId,
+        sessionId: sessionId
     };
+}
+
+/**
+ * Robust MongoDB Conversation Persister & Upsert Engine
+ * Safely handles temporary client IDs, nulls, and standard 24-hex ObjectIds without CastError
+ */
+async function persistConversationToMongo({
+    conversationId,
+    userEmail,
+    userId,
+    title,
+    userMessage,
+    botMessage,
+    type = 'text',
+    pptData = null,
+    imageUrl = null,
+    attachments = []
+}) {
+    const cleanEmail = (userEmail || '').toLowerCase().trim();
+    const effectiveUserId = userId || cleanEmail || 'guest';
+    const newMessages = [];
+
+    if (userMessage) {
+        newMessages.push({
+            id: 'msg_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7),
+            role: 'user',
+            content: typeof userMessage === 'string' ? userMessage : (userMessage.content || ''),
+            attachments: Array.isArray(attachments) ? attachments : [],
+            timestamp: new Date()
+        });
+    }
+
+    if (botMessage) {
+        const botContent = typeof botMessage === 'string' ? botMessage : (botMessage.content || '');
+        const isPpt = type === 'ppt' || !!pptData;
+        const isImg = type === 'image' || !!imageUrl;
+
+        const botMsgObj = {
+            id: 'msg_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7),
+            role: 'assistant',
+            content: botContent,
+            type: type || (isPpt ? 'ppt' : (isImg ? 'image' : 'text')),
+            timestamp: new Date()
+        };
+
+        if (isPpt) {
+            botMsgObj.isPresentation = true;
+            botMsgObj.pptData = pptData;
+            botMsgObj.deck = pptData;
+            botMsgObj.deckData = pptData;
+            if (pptData && pptData.downloadUrl) botMsgObj.downloadUrl = pptData.downloadUrl;
+            if (pptData && pptData.filename) botMsgObj.filename = pptData.filename;
+        }
+
+        if (isImg) {
+            botMsgObj.isImage = true;
+            botMsgObj.imageUrl = imageUrl;
+            botMsgObj.fallbackUrl = imageUrl;
+            botMsgObj.imageData = { imageUrl };
+        }
+
+        newMessages.push(botMsgObj);
+    }
+
+    if (!isMongoConnected()) {
+        console.warn('⚠️ MongoDB Skip: Database not connected.');
+        return conversationId || null;
+    }
+
+    try {
+        const ConvModel = Conversation || ChatSession;
+        const rawId = conversationId ? String(conversationId).trim() : '';
+        const isHex24 = rawId && /^[0-9a-fA-F]{24}$/.test(rawId);
+        const isValidObjectId = isHex24 && mongoose.Types.ObjectId.isValid(rawId);
+
+        let updatedConv = null;
+
+        // 1. Check if conversationId is a valid 24-character hex MongoDB ObjectId
+        if (isValidObjectId) {
+            try {
+                updatedConv = await ConvModel.findByIdAndUpdate(
+                    rawId,
+                    {
+                        $push: { messages: { $each: newMessages } },
+                        $set: { updatedAt: new Date() }
+                    },
+                    { new: true, runValidators: false }
+                );
+            } catch (castErr) {
+                console.warn('⚠️ MongoDB findByIdAndUpdate notice:', castErr.message);
+            }
+        }
+
+        // 2. If no match by ObjectId, check custom string ID (e.g. sess_...)
+        if (!updatedConv && rawId && !rawId.startsWith('temp_') && rawId !== 'null' && rawId !== 'undefined') {
+            try {
+                updatedConv = await ConvModel.findOneAndUpdate(
+                    { id: rawId },
+                    {
+                        $push: { messages: { $each: newMessages } },
+                        $set: { updatedAt: new Date() }
+                    },
+                    { new: true, runValidators: false }
+                );
+            } catch (findErr) {
+                console.warn('⚠️ MongoDB findOneAndUpdate by id notice:', findErr.message);
+            }
+        }
+
+        if (updatedConv) {
+            const resultId = updatedConv._id ? updatedConv._id.toString() : updatedConv.id;
+            console.log(`✅ MongoDB Updated Conversation: ${resultId} (Total msgs: ${updatedConv.messages ? updatedConv.messages.length : 0})`);
+            return resultId;
+        }
+
+        // 3. If no valid existing conversation found, create a brand new document in MongoDB
+        const fallbackTitle = typeof userMessage === 'string' ? userMessage : (title || 'New Session');
+        const customSessionId = (rawId && !rawId.startsWith('temp_') && rawId !== 'null' && rawId !== 'undefined')
+            ? rawId
+            : ('sess_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7));
+
+        const createdConv = await ConvModel.create({
+            id: customSessionId,
+            userId: effectiveUserId,
+            userEmail: cleanEmail,
+            title: (title || fallbackTitle || 'New Session').slice(0, 50),
+            messages: newMessages
+        });
+
+        const createdId = createdConv._id ? createdConv._id.toString() : createdConv.id;
+        console.log(`✅ MongoDB Created New Conversation: ${createdId} for ${cleanEmail || effectiveUserId}`);
+        return createdId;
+    } catch (err) {
+        console.error('❌ MongoDB Write/Update Failed:', err.message);
+        return null;
+    }
 }
 
 async function syncUserSessions(sessions, userId = 'guest', userEmail = '') {
@@ -749,6 +949,7 @@ module.exports = {
     getSessionById,
     saveOrUpdateSession,
     appendMessageToSession,
+    persistConversationToMongo,
     syncUserSessions,
     deleteUserSession,
     savePptDeck,

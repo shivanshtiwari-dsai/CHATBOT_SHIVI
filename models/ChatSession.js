@@ -11,19 +11,22 @@ const { ChatMessageSchema } = require('./ChatMessage.js');
 const ChatSessionSchema = new mongoose.Schema({
     id: {
         type: String,
-        required: true,
-        unique: true,
-        index: true
+        required: false,
+        default: () => 'sess_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7),
+        index: true,
+        sparse: true
     },
     userId: {
         type: String,
-        required: true,
+        default: 'guest',
         index: true
     },
     userEmail: {
         type: String,
         index: true,
-        default: ''
+        default: '',
+        lowercase: true,
+        trim: true
     },
     title: {
         type: String,
@@ -64,5 +67,8 @@ ChatSessionSchema.index({ userEmail: 1, updatedAt: -1 });
 ChatSessionSchema.index({ id: 1, userId: 1 });
 
 const ChatSession = mongoose.models.ChatSession || mongoose.model('ChatSession', ChatSessionSchema);
+const Conversation = mongoose.models.Conversation || mongoose.model('Conversation', ChatSessionSchema);
 
 module.exports = ChatSession;
+module.exports.ChatSession = ChatSession;
+module.exports.Conversation = Conversation;
