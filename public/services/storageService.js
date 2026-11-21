@@ -1,0 +1,961 @@
+/**
+ * SHIVI AI — HYBRID PERSISTENCE & STORAGE FALLBACK ENGINE
+ * 
+ * Provides unified data access for Users, Chat Sessions, Messages, and PPT Decks.
+ * - Prioritizes MongoDB via Mongoose when available
+ * - Automatically degrades to local files (users.json, disk storage) and client localStorage when offline
+ * - Auto-syncs users from users.json to MongoDB upon connection
+ */
+
+const fs = require('node:fs');
+const path = require('node:path');
+const { isMongoConnected, getConnectionStatus, mongoose } = require('../config/db.js');
+const { User, ChatSession, Conversation, ChatMessage, PptDeck } = require('../models/index.js');
+
+const ROOT_DIR = path.resolve(__dirname, '..');
+const USERS_PATH = path.join(ROOT_DIR, 'users.json');
+const DOWNLOADS_DIR = path.join(ROOT_DIR, 'downloads');
+
+// Ensure downloads directory exists
+if (!fs.existsSync(DOWNLOADS_DIR)) {
+    try {
+        fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
+    } catch (e) {
+        console.warn('[Storage] Could not create downloads dir:', e.message);
+    }
+}
+
+// ----------------------------------------------------
+// LOCAL FILE STORAGE HELPERS (OFFLINE FALLBACK)
+// ----------------------------------------------------
+function readLocalUsers() {
+    try {
+        if (!fs.existsSync(USERS_PATH)) return [];
+        const raw = fs.readFileSync(USERS_PATH, 'utf-8');
+        return JSON.parse(raw);
+    } catch (e) {
+        console.warn('[Storage] Error reading users.json fallback:', e.message);
+        return [];
+    }
+}
+
+function writeLocalUsers(users) {
+    try {
+        fs.writeFileSync(USERS_PATH, JSON.stringify(users, null, 2), 'utf-8');
+        return true;
+    } catch (e) {
+        console.error('[Storage] Error saving users.json fallback:', e.message);
+        return false;
+    }
+}
+
+// ----------------------------------------------------
+// AUTO-MIGRATION / SEEDING FROM users.json TO MONGODB
+// ----------------------------------------------------
+async function seedLocalUsersToMongo() {
+    if (!isMongoConnected()) return;
+    try {
+        const localUsers = readLocalUsers();
+        if (!Array.isArray(localUsers) || localUsers.length === 0) return;
+
+        for (const u of localUsers) {
+            if (!u.email) continue;
+            const exists = await User.findOne({ email: u.email.toLowerCase() });
+            if (!exists) {
+                await User.create({
+                    id: u.id || ('usr_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 4)),
+                    name: u.name || 'Explorer',
+                    email: u.email.toLowerCase(),
+                    passwordHash: u.passwordHash || '',
+                    salt: u.salt || '',
+                    provider: u.provider || 'email',
+                    avatar: u.avatar || 'U',
+                    plan: u.plan || 'free',
+                    settings: u.settings || {},
+                    createdAt: u.createdAt ? new Date(u.createdAt) : new Date()
+                });
+                console.log(`[Storage] Migrated user from users.json to MongoDB: ${u.email}`);
+            }
+        }
+    } catch (err) {
+        console.warn('[Storage] Notice during initial users sync to MongoDB:', err.message);
+    }
+}
+
+async function migrateLegacyCollections() {
+    if (!isMongoConnected() || !mongoose.connection || !mongoose.connection.db) return;
+    try {
+        const collections = await mongoose.connection.db.listCollections().toArray();
+        const colNames = collections.map(c => c.name);
+        if (colNames.includes('chat_sessions')) {
+            const legacyDocs = await mongoose.connection.db.collection('chat_sessions').find({}).toArray();
+            if (legacyDocs.length > 0) {
+                for (const doc of legacyDocs) {
+                    const exists = await ChatSession.findOne({ id: doc.id });
+                    if (!exists) {
+                        const copy = Object.assign({}, doc);
+                        delete copy._id;
+                        await ChatSession.create(copy);
+                    }
+                }
+                console.log(`[Storage] Migrated ${legacyDocs.length} legacy chat_sessions to MongoDB conversations collection.`);
+            }
+        }
+    } catch (e) {
+        console.warn('[Storage] Notice during collection migration:', e.message);
+    }
+}
+
+// ----------------------------------------------------
+// USER REPOSITORY
+// ----------------------------------------------------
+async function findUserByEmail(email) {
+    const cleanEmail = (email || '').trim().toLowerCase();
+    if (!cleanEmail) return null;
+
+    if (isMongoConnected()) {
+        try {
+            const user = await User.findOne({ email: cleanEmail });
+            if (user) return user.toObject();
+        } catch (err) {
+            console.warn('[Storage] MongoDB query failed, falling back to users.json:', err.message);
+        }
+    }
+
+    // Fallback: local users.json
+    const users = readLocalUsers();
+    return users.find(u => (u.email || '').toLowerCase() === cleanEmail) || null;
+}
+
+async function findUserById(id) {
+    if (!id) return null;
+
+    if (isMongoConnected()) {
+        try {
+            const user = await User.findOne({ id: id });
+            if (user) return user.toObject();
+        } catch (err) {
+            console.warn('[Storage] MongoDB findUserById failed, using fallback:', err.message);
+        }
+    }
+
+    const users = readLocalUsers();
+    return users.find(u => u.id === id) || null;
+}
+
+async function createUser(userData) {
+    const cleanEmail = (userData.email || '').trim().toLowerCase();
+    const cleanId = userData.id || ('usr_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 6));
+
+    const record = {
+        id: cleanId,
+        name: (userData.name || '').trim(),
+        email: cleanEmail,
+        passwordHash: userData.passwordHash || '',
+        salt: userData.salt || '',
+        provider: userData.provider || 'email',
+        avatar: userData.avatar || (userData.name ? userData.name.slice(0, 2).toUpperCase() : 'U'),
+        plan: userData.plan || 'free',
+        settings: userData.settings || {},
+        createdAt: new Date().toISOString()
+    };
+
+    // Always mirror to users.json as offline safety net
+    const localUsers = readLocalUsers();
+    const existingIdx = localUsers.findIndex(u => (u.email || '').toLowerCase() === cleanEmail);
+    if (existingIdx !== -1) {
+        localUsers[existingIdx] = Object.assign({}, localUsers[existingIdx], record);
+    } else {
+        localUsers.push(record);
+    }
+    writeLocalUsers(localUsers);
+
+    // Save to MongoDB if available
+    if (isMongoConnected()) {
+        try {
+            const created = await User.create(record);
+            return created.toSafeJSON();
+        } catch (err) {
+            console.error('[Storage] MongoDB createUser error, relying on local snapshot:', err.message);
+        }
+    }
+
+    const safeUser = Object.assign({}, record);
+    delete safeUser.passwordHash;
+    delete safeUser.salt;
+    return safeUser;
+}
+
+async function updateUser(idOrEmail, updates) {
+    // 1. Mirror to local users.json
+    const localUsers = readLocalUsers();
+    const idx = localUsers.findIndex(u => u.id === idOrEmail || (u.email && u.email.toLowerCase() === String(idOrEmail).toLowerCase()));
+    if (idx !== -1) {
+        localUsers[idx] = Object.assign({}, localUsers[idx], updates);
+        writeLocalUsers(localUsers);
+    }
+
+    // 2. Update MongoDB if connected
+    if (isMongoConnected()) {
+        try {
+            const query = (updates.id) ? { id: updates.id } : { $or: [{ id: idOrEmail }, { email: String(idOrEmail).toLowerCase() }] };
+            const updated = await User.findOneAndUpdate(query, { $set: updates }, { returnDocument: 'after' });
+            if (updated) return updated.toSafeJSON();
+        } catch (err) {
+            console.warn('[Storage] MongoDB updateUser notice:', err.message);
+        }
+    }
+
+    return idx !== -1 ? localUsers[idx] : null;
+}
+
+async function updateUserSettings(idOrEmail, newSettings) {
+    if (!newSettings || typeof newSettings !== 'object') return false;
+
+    // 1. Mirror in local storage
+    const localUsers = readLocalUsers();
+    const idx = localUsers.findIndex(u => u.id === idOrEmail || (u.email && u.email.toLowerCase() === String(idOrEmail).toLowerCase()));
+    if (idx !== -1) {
+        localUsers[idx].settings = Object.assign({}, localUsers[idx].settings || {}, newSettings);
+        writeLocalUsers(localUsers);
+    }
+
+    // 2. Update MongoDB
+    if (isMongoConnected()) {
+        try {
+            await User.findOneAndUpdate(
+                { $or: [{ id: idOrEmail }, { email: String(idOrEmail).toLowerCase() }] },
+                { $set: { settings: newSettings } },
+                { returnDocument: 'after' }
+            );
+            return true;
+        } catch (err) {
+            console.warn('[Storage] MongoDB updateUserSettings notice:', err.message);
+        }
+    }
+    return true;
+}
+
+async function syncUserProfile(userData) {
+    if (!userData || (!userData.email && !userData.id)) return null;
+    const cleanEmail = (userData.email || '').trim().toLowerCase();
+    const displayName = (userData.name || '').trim() || (cleanEmail ? cleanEmail.split('@')[0] : 'Explorer');
+
+    if (isMongoConnected()) {
+        try {
+            const user = await User.findOneAndUpdate(
+                { email: cleanEmail },
+                {
+                    $set: {
+                        lastLogin: new Date(),
+                        lastLoginAt: new Date(),
+                        ...(userData.themePreference ? { themePreference: userData.themePreference, 'settings.theme': userData.themePreference } : {}),
+                        ...(userData.voiceEnabled !== undefined ? { voiceEnabled: !!userData.voiceEnabled, 'settings.voiceEnabled': !!userData.voiceEnabled } : {})
+                    },
+                    $setOnInsert: {
+                        id: 'usr_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 6),
+                        name: displayName,
+                        email: cleanEmail,
+                        provider: userData.provider || 'universal',
+                        avatar: userData.avatar || (displayName ? displayName.slice(0, 2).toUpperCase() : 'U'),
+                        themePreference: userData.themePreference || 'cyberpunk',
+                        voiceEnabled: userData.voiceEnabled !== undefined ? !!userData.voiceEnabled : true,
+                        plan: userData.plan || 'free',
+                        settings: {
+                            theme: userData.themePreference || 'cyberpunk',
+                            voiceEnabled: userData.voiceEnabled !== undefined ? !!userData.voiceEnabled : true
+                        }
+                    }
+                },
+                { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true }
+            );
+            return user ? (user.toSafeJSON ? user.toSafeJSON() : user) : null;
+        } catch (err) {
+            console.error('[Storage] MongoDB syncUserProfile upsert notice:', err.message);
+        }
+    }
+
+    // Resilient fallback: Never block user login
+    return {
+        id: 'usr_' + Date.now().toString(36),
+        name: displayName,
+        email: cleanEmail,
+        provider: userData.provider || 'universal',
+        avatar: userData.avatar || (displayName ? displayName.slice(0, 2).toUpperCase() : 'U'),
+        themePreference: userData.themePreference || 'cyberpunk',
+        voiceEnabled: userData.voiceEnabled !== undefined ? !!userData.voiceEnabled : true
+    };
+}
+
+async function updateUserPreferences(idOrEmail, preferences) {
+    if (!idOrEmail || !preferences) return null;
+    const cleanKey = String(idOrEmail).trim();
+    const isHex24 = /^[0-9a-fA-F]{24}$/.test(cleanKey);
+    const isObjId = isHex24 && mongoose.Types.ObjectId.isValid(cleanKey);
+
+    let query = {};
+    if (cleanKey.includes('@')) {
+        query = { email: cleanKey.toLowerCase() };
+    } else if (isObjId) {
+        query = { $or: [{ _id: new mongoose.Types.ObjectId(cleanKey) }, { id: cleanKey }, { email: cleanKey.toLowerCase() }] };
+    } else {
+        query = { $or: [{ id: cleanKey }, { email: cleanKey.toLowerCase() }] };
+    }
+
+    const updates = {};
+    const chosenTheme = preferences.themePreference || preferences.theme;
+    if (chosenTheme) {
+        updates.themePreference = chosenTheme;
+        updates['settings.theme'] = chosenTheme;
+    }
+    if (preferences.voiceEnabled !== undefined) {
+        updates.voiceEnabled = !!preferences.voiceEnabled;
+        updates['settings.voiceEnabled'] = !!preferences.voiceEnabled;
+    }
+    if (preferences.font) updates['settings.font'] = preferences.font;
+    if (preferences.persona) updates['settings.persona'] = preferences.persona;
+    if (preferences.speechRate !== undefined) updates['settings.speechRate'] = preferences.speechRate;
+    if (preferences.sfxVolume !== undefined) updates['settings.sfxVolume'] = preferences.sfxVolume;
+    if (preferences.sfxEnabled !== undefined) updates['settings.sfxEnabled'] = preferences.sfxEnabled;
+    if (preferences.brainProvider) updates['settings.brainProvider'] = preferences.brainProvider;
+    if (preferences.systemInstructions !== undefined) updates['settings.systemInstructions'] = preferences.systemInstructions;
+
+    if (isMongoConnected()) {
+        try {
+            const fallbackEmail = cleanKey.includes('@') ? cleanKey.toLowerCase() : ((preferences.email || cleanKey) + '@shiviai.local');
+            const updated = await User.findOneAndUpdate(
+                query,
+                {
+                    $set: updates,
+                    $setOnInsert: {
+                        id: cleanKey,
+                        email: fallbackEmail,
+                        name: cleanKey.split('@')[0] || 'Explorer',
+                        provider: 'universal'
+                    }
+                },
+                { returnDocument: 'after', upsert: true }
+            );
+            if (updated) return updated.toSafeJSON ? updated.toSafeJSON() : updated;
+        } catch (err) {
+            console.error('[Storage] MongoDB updateUserPreferences error:', err.message);
+        }
+    }
+
+    return null;
+}
+
+// ----------------------------------------------------
+// CHAT SESSION & CONVERSATION REPOSITORY
+// ----------------------------------------------------
+async function getUserSessions(userId, userEmail = '') {
+    if (isMongoConnected()) {
+        try {
+            const cleanEmail = (userEmail || (userId && userId.includes('@') ? userId : '')).trim().toLowerCase();
+            const cleanId = userId && !userId.includes('@') ? userId : '';
+
+            // Strict privacy isolation: If an email is provided, query strictly by userEmail only.
+            let query = {};
+            if (cleanEmail) {
+                query = { userEmail: cleanEmail };
+            } else if (cleanId && cleanId !== 'guest') {
+                query = { userId: cleanId };
+            } else {
+                query = { userId: 'guest' };
+            }
+
+            const sessions = await ChatSession.find(query).sort({ updatedAt: -1 }).lean();
+            const mapped = sessions.map(s => ({
+                id: s.id,
+                conversationId: s.id,
+                title: s.title || 'Untitled Conversation',
+                currentPersona: s.currentPersona || 'companion',
+                pinned: !!s.pinned,
+                createdAt: s.createdAt,
+                updatedAt: s.updatedAt,
+                messageCount: s.messages ? s.messages.length : 0,
+                messages: (s.messages || []).map(m => ({
+                    id: m.id,
+                    role: m.role,
+                    content: m.content,
+                    timestamp: m.timestamp,
+                    createdAt: m.createdAt,
+                    type: m.type,
+                    deck: m.deck,
+                    imageUrl: m.imageUrl
+                }))
+            }));
+
+            return {
+                success: true,
+                conversations: mapped,
+                recentChats: mapped,
+                sessions: mapped
+            };
+        } catch (err) {
+            console.error('[Storage] getUserSessions error:', err.message);
+        }
+    }
+
+    return {
+        success: true,
+        conversations: [],
+        recentChats: [],
+        sessions: []
+    };
+}
+
+async function getSessionById(sessionId) {
+    if (!sessionId) return null;
+    if (isMongoConnected()) {
+        try {
+            const cleanId = String(sessionId).trim();
+            const isHex24 = /^[0-9a-fA-F]{24}$/.test(cleanId);
+            const isObjId = isHex24 && mongoose.Types.ObjectId.isValid(cleanId);
+
+            const query = isObjId
+                ? { $or: [{ _id: new mongoose.Types.ObjectId(cleanId) }, { id: cleanId }] }
+                : { id: cleanId };
+
+            const ConvModel = Conversation || ChatSession;
+            const session = await ConvModel.findOne(query).lean();
+            if (session) {
+                return {
+                    id: session.id || (session._id ? session._id.toString() : cleanId),
+                    _id: session._id ? session._id.toString() : undefined,
+                    conversationId: session.id || (session._id ? session._id.toString() : cleanId),
+                    title: session.title || 'Untitled Conversation',
+                    currentPersona: session.currentPersona || 'companion',
+                    pinned: !!session.pinned,
+                    createdAt: session.createdAt,
+                    updatedAt: session.updatedAt,
+                    messages: (session.messages || []).map(m => ({
+                        id: m.id,
+                        role: m.role,
+                        content: m.content,
+                        timestamp: m.timestamp,
+                        createdAt: m.createdAt,
+                        type: m.type || (m.isPresentation ? 'ppt' : (m.isImage ? 'image' : 'text')),
+                        deck: m.deck || m.deckData || m.pptData,
+                        pptData: m.pptData || m.deckData || m.deck,
+                        imageUrl: m.imageUrl || (m.imageData && m.imageData.imageUrl),
+                        imageData: m.imageData
+                    }))
+                };
+            }
+        } catch (err) {
+            console.warn('[Storage] getSessionById error:', err.message);
+        }
+    }
+    return null;
+}
+
+async function saveOrUpdateSession(sessionData, userId = 'guest', userEmail = '') {
+    if (!sessionData || !sessionData.id) return { success: false, error: 'Session data with id is required.' };
+
+    if (isMongoConnected()) {
+        try {
+            const filter = { id: sessionData.id };
+            const update = {
+                id: sessionData.id,
+                userId: userId || sessionData.userId || 'guest',
+                userEmail: (userEmail || sessionData.userEmail || '').toLowerCase(),
+                title: sessionData.title || 'New Conversation',
+                currentPersona: sessionData.currentPersona || 'companion',
+                pinned: !!sessionData.pinned,
+                messages: Array.isArray(sessionData.messages) ? sessionData.messages : [],
+                updatedAt: new Date()
+            };
+
+            const session = await ChatSession.findOneAndUpdate(filter, update, {
+                upsert: true,
+                returnDocument: 'after',
+                setDefaultsOnInsert: true
+            });
+
+            return {
+                success: true,
+                mode: 'mongodb',
+                session: session
+            };
+        } catch (err) {
+            console.error('[Storage] MongoDB saveOrUpdateSession error:', err.message);
+        }
+    }
+
+    return {
+        success: true,
+        mode: 'local_fallback',
+        message: 'Saved to local cache fallback.'
+    };
+}
+
+async function appendMessageToSession(sessionId, message, userId = 'guest', userEmail = '') {
+    if (!sessionId || !message) return { success: false, error: 'sessionId and message are required.' };
+
+    let effectiveUserId = 'guest';
+    let effectiveEmail = '';
+
+    if (typeof userId === 'object' && userId !== null) {
+        effectiveUserId = userId.userId || userId.id || 'guest';
+        effectiveEmail = (userId.userEmail || userId.email || '').toLowerCase();
+    } else {
+        effectiveUserId = userId || 'guest';
+        effectiveEmail = (userEmail || '').toLowerCase();
+    }
+
+    if (isMongoConnected()) {
+        try {
+            const cleanId = String(sessionId).trim();
+            const isHex24 = /^[0-9a-fA-F]{24}$/.test(cleanId);
+            const isObjId = isHex24 && mongoose.Types.ObjectId.isValid(cleanId);
+
+            const filter = isObjId
+                ? { $or: [{ _id: new mongoose.Types.ObjectId(cleanId) }, { id: cleanId }] }
+                : { id: cleanId };
+
+            const rawImgUrl = message.imageUrl || (message.imageData && message.imageData.imageUrl) || '';
+            const rawDeck = message.deck || message.deckData || message.pptData || null;
+            const isPpt = !!(message.isPresentation || message.type === 'ppt' || rawDeck);
+            const isImg = !!(message.isImage || message.type === 'image' || rawImgUrl);
+
+            const formattedMsg = {
+                id: message.id || ('msg_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7)),
+                sessionId: cleanId,
+                userId: effectiveUserId,
+                role: message.role || 'user',
+                content: message.content || '',
+                timestamp: message.timestamp ? new Date(message.timestamp) : new Date(),
+                provider: message.provider || 'builtin',
+                model: message.model || '',
+                persona: message.persona || 'companion',
+                attachments: Array.isArray(message.attachments) ? message.attachments : [],
+                type: message.type || (isPpt ? 'ppt' : (isImg ? 'image' : 'text')),
+                isImage: isImg,
+                imageUrl: rawImgUrl,
+                fallbackUrl: message.fallbackUrl || rawImgUrl,
+                imageData: message.imageData || (rawImgUrl ? { imageUrl: rawImgUrl } : null),
+                prompt: message.prompt || '',
+                isPresentation: isPpt,
+                downloadUrl: message.downloadUrl || (rawDeck && rawDeck.downloadUrl) || '',
+                filename: message.filename || (rawDeck && rawDeck.filename) || '',
+                deck: rawDeck,
+                deckData: rawDeck,
+                pptData: rawDeck
+            };
+
+            const ConvModel = Conversation || ChatSession;
+            const updatedSession = await ConvModel.findOneAndUpdate(
+                filter,
+                {
+                    $push: { messages: formattedMsg },
+                    $set: { updatedAt: new Date() },
+                    $setOnInsert: {
+                        id: cleanId.startsWith('temp_') ? ('sess_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7)) : cleanId,
+                        userId: effectiveUserId,
+                        userEmail: effectiveEmail,
+                        title: message.role === 'user' && message.content ? String(message.content).slice(0, 35) : 'New Conversation'
+                    }
+                },
+                { upsert: true, returnDocument: 'after' }
+            );
+
+            if (formattedMsg.isPresentation || rawDeck) {
+                try {
+                    const deckInfo = rawDeck || {
+                        title: message.filename || 'Presentation',
+                        topic: message.prompt || 'Presentation',
+                        filename: message.filename || `presentation_${Date.now()}.pptx`,
+                        downloadUrl: message.downloadUrl || ''
+                    };
+                    await savePptDeck(deckInfo, effectiveUserId, effectiveEmail, cleanId);
+                } catch (deckErr) {
+                    console.warn('[Storage] Auto-saving PPT deck notice:', deckErr.message);
+                }
+            }
+
+            const confirmedId = updatedSession._id ? updatedSession._id.toString() : (updatedSession.id || cleanId);
+            return {
+                success: true,
+                mode: 'mongodb',
+                session: updatedSession,
+                conversationId: confirmedId,
+                sessionId: confirmedId,
+                message: formattedMsg,
+                messageCount: updatedSession.messages ? updatedSession.messages.length : 0
+            };
+        } catch (err) {
+            console.error('[Storage] MongoDB appendMessageToSession error:', err.message);
+        }
+    }
+
+    return {
+        success: true,
+        mode: 'local_fallback',
+        conversationId: sessionId,
+        sessionId: sessionId
+    };
+}
+
+/**
+ * Robust MongoDB Conversation Persister & Upsert Engine
+ * Safely handles temporary client IDs, nulls, and standard 24-hex ObjectIds without CastError
+ */
+async function persistConversationToMongo({
+    conversationId,
+    userEmail,
+    userId,
+    title,
+    userMessage,
+    botMessage,
+    type = 'text',
+    pptData = null,
+    imageUrl = null,
+    attachments = []
+}) {
+    const cleanEmail = (userEmail || '').toLowerCase().trim();
+    const effectiveUserId = userId || cleanEmail || 'guest';
+    const newMessages = [];
+
+    if (userMessage) {
+        newMessages.push({
+            id: 'msg_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7),
+            role: 'user',
+            content: typeof userMessage === 'string' ? userMessage : (userMessage.content || ''),
+            attachments: Array.isArray(attachments) ? attachments : [],
+            timestamp: new Date()
+        });
+    }
+
+    if (botMessage) {
+        const botContent = typeof botMessage === 'string' ? botMessage : (botMessage.content || '');
+        const isPpt = type === 'ppt' || !!pptData;
+        const isImg = type === 'image' || !!imageUrl;
+
+        const botMsgObj = {
+            id: 'msg_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7),
+            role: 'assistant',
+            content: botContent,
+            type: type || (isPpt ? 'ppt' : (isImg ? 'image' : 'text')),
+            timestamp: new Date()
+        };
+
+        if (isPpt) {
+            botMsgObj.isPresentation = true;
+            botMsgObj.pptData = pptData;
+            botMsgObj.deck = pptData;
+            botMsgObj.deckData = pptData;
+            if (pptData && pptData.downloadUrl) botMsgObj.downloadUrl = pptData.downloadUrl;
+            if (pptData && pptData.filename) botMsgObj.filename = pptData.filename;
+        }
+
+        if (isImg) {
+            botMsgObj.isImage = true;
+            botMsgObj.imageUrl = imageUrl;
+            botMsgObj.fallbackUrl = imageUrl;
+            botMsgObj.imageData = { imageUrl };
+        }
+
+        newMessages.push(botMsgObj);
+    }
+
+    if (!isMongoConnected()) {
+        console.warn('⚠️ MongoDB Skip: Database not connected.');
+        return conversationId || null;
+    }
+
+    try {
+        const ConvModel = Conversation || ChatSession;
+        const rawId = conversationId ? String(conversationId).trim() : '';
+        const isHex24 = rawId && /^[0-9a-fA-F]{24}$/.test(rawId);
+        const isValidObjectId = isHex24 && mongoose.Types.ObjectId.isValid(rawId);
+
+        let updatedConv = null;
+
+        // 1. Check if conversationId is a valid 24-character hex MongoDB ObjectId
+        if (isValidObjectId) {
+            try {
+                updatedConv = await ConvModel.findByIdAndUpdate(
+                    rawId,
+                    {
+                        $push: { messages: { $each: newMessages } },
+                        $set: { updatedAt: new Date() }
+                    },
+                    { new: true, runValidators: false }
+                );
+            } catch (castErr) {
+                console.warn('⚠️ MongoDB findByIdAndUpdate notice:', castErr.message);
+            }
+        }
+
+        // 2. If no match by ObjectId, check custom string ID (e.g. sess_...)
+        if (!updatedConv && rawId && !rawId.startsWith('temp_') && rawId !== 'null' && rawId !== 'undefined') {
+            try {
+                updatedConv = await ConvModel.findOneAndUpdate(
+                    { id: rawId },
+                    {
+                        $push: { messages: { $each: newMessages } },
+                        $set: { updatedAt: new Date() }
+                    },
+                    { new: true, runValidators: false }
+                );
+            } catch (findErr) {
+                console.warn('⚠️ MongoDB findOneAndUpdate by id notice:', findErr.message);
+            }
+        }
+
+        if (updatedConv) {
+            const resultId = updatedConv._id ? updatedConv._id.toString() : updatedConv.id;
+            console.log(`✅ MongoDB Updated Conversation: ${resultId} (Total msgs: ${updatedConv.messages ? updatedConv.messages.length : 0})`);
+            return resultId;
+        }
+
+        // 3. If no valid existing conversation found, create a brand new document in MongoDB
+        const fallbackTitle = typeof userMessage === 'string' ? userMessage : (title || 'New Session');
+        const customSessionId = (rawId && !rawId.startsWith('temp_') && rawId !== 'null' && rawId !== 'undefined')
+            ? rawId
+            : ('sess_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7));
+
+        const createdConv = await ConvModel.create({
+            id: customSessionId,
+            userId: effectiveUserId,
+            userEmail: cleanEmail,
+            title: (title || fallbackTitle || 'New Session').slice(0, 50),
+            messages: newMessages
+        });
+
+        const createdId = createdConv._id ? createdConv._id.toString() : createdConv.id;
+        console.log(`✅ MongoDB Created New Conversation: ${createdId} for ${cleanEmail || effectiveUserId}`);
+        return createdId;
+    } catch (err) {
+        console.error('❌ MongoDB Write/Update Failed:', err.message);
+        return null;
+    }
+}
+
+async function syncUserSessions(sessions, userId = 'guest', userEmail = '') {
+    if (!Array.isArray(sessions)) return { success: false, error: 'Sessions must be an array' };
+
+    let syncedCount = 0;
+    if (isMongoConnected()) {
+        try {
+            for (const s of sessions) {
+                if (!s || !s.id) continue;
+                await ChatSession.findOneAndUpdate(
+                    { id: s.id },
+                    {
+                        id: s.id,
+                        userId: userId || 'guest',
+                        userEmail: (userEmail || '').toLowerCase(),
+                        title: s.title || 'Conversation',
+                        currentPersona: s.currentPersona || 'companion',
+                        pinned: !!s.pinned,
+                        messages: Array.isArray(s.messages) ? s.messages : [],
+                        updatedAt: s.updatedAt ? new Date(s.updatedAt) : new Date()
+                    },
+                    { upsert: true }
+                );
+                syncedCount++;
+            }
+            return {
+                success: true,
+                mode: 'mongodb',
+                syncedCount: syncedCount,
+                message: `Successfully synchronized ${syncedCount} conversations to MongoDB.`
+            };
+        } catch (err) {
+            console.error('[Storage] MongoDB syncUserSessions error:', err.message);
+        }
+    }
+
+    return {
+        success: true,
+        mode: 'local_fallback',
+        syncedCount: sessions.length,
+        message: 'Operating in local cache fallback mode.'
+    };
+}
+
+async function deleteUserSession(sessionId, userId = null) {
+    if (!sessionId) return { success: false };
+
+    if (isMongoConnected()) {
+        try {
+            const query = { id: sessionId };
+            if (userId && userId !== 'guest') {
+                query.$or = [{ userId: userId }, { userEmail: String(userId).toLowerCase() }];
+            }
+            await ChatSession.deleteOne(query);
+            return { success: true, mode: 'mongodb' };
+        } catch (err) {
+            console.error('[Storage] MongoDB deleteUserSession error:', err.message);
+        }
+    }
+
+    return { success: true, mode: 'local_fallback' };
+}
+
+// ----------------------------------------------------
+// PPT DECK REPOSITORY
+// ----------------------------------------------------
+async function savePptDeck(deckInfo, userId = 'guest', userEmail = '', sessionId = '') {
+    if (!deckInfo) return null;
+
+    const fallbackFilename = 'presentation_' + Date.now() + '.pptx';
+    const filename = deckInfo.filename || fallbackFilename;
+    const downloadUrl = deckInfo.downloadUrl || ('/api/presentation/download/' + filename);
+
+    const deckRecord = {
+        id: deckInfo.id || ('deck_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 6)),
+        userId: userId || 'guest',
+        userEmail: (userEmail || '').toLowerCase(),
+        sessionId: sessionId || '',
+        title: deckInfo.title || deckInfo.deck_title || deckInfo.topic || 'Executive Presentation',
+        topic: deckInfo.topic || deckInfo.title || 'Presentation',
+        theme: deckInfo.theme || 'modern_blue',
+        slideCount: deckInfo.slideCount || (deckInfo.slides ? deckInfo.slides.length : 0),
+        filename: filename,
+        downloadUrl: downloadUrl,
+        filePath: deckInfo.filePath || '',
+        slides: Array.isArray(deckInfo.slides) ? deckInfo.slides : [],
+        deckData: deckInfo.deckData || deckInfo,
+        createdAt: new Date()
+    };
+
+    if (isMongoConnected()) {
+        try {
+            const created = await PptDeck.create(deckRecord);
+            return created.toObject();
+        } catch (err) {
+            console.error('[Storage] MongoDB savePptDeck error, falling back to disk:', err.message);
+        }
+    }
+
+    return deckRecord;
+}
+
+async function getUserDecks(userId, userEmail = '') {
+    if (isMongoConnected()) {
+        try {
+            const orQuery = [];
+            if (userId) orQuery.push({ userId: userId });
+            if (userEmail) orQuery.push({ userEmail: userEmail.toLowerCase() });
+            if (orQuery.length === 0) orQuery.push({ userId: 'guest' });
+
+            const decks = await PptDeck.find({ $or: orQuery }).sort({ createdAt: -1 }).lean();
+            return {
+                success: true,
+                mode: 'mongodb',
+                decks: decks
+            };
+        } catch (err) {
+            console.error('[Storage] MongoDB getUserDecks error:', err.message);
+        }
+    }
+
+    // Disk fallback: check downloads folder
+    try {
+        if (fs.existsSync(DOWNLOADS_DIR)) {
+            const files = fs.readdirSync(DOWNLOADS_DIR).filter(f => f.endsWith('.pptx'));
+            const localDecks = files.map(file => ({
+                id: file,
+                title: file.replace(/_\d+\.pptx$/, '').replace(/_/g, ' '),
+                filename: file,
+                downloadUrl: `/downloads/${file}`,
+                createdAt: fs.statSync(path.join(DOWNLOADS_DIR, file)).mtime
+            }));
+            return {
+                success: true,
+                mode: 'local_fallback',
+                decks: localDecks
+            };
+        }
+    } catch (e) {
+        console.warn('[Storage] Error listing local downloads:', e.message);
+    }
+
+    return { success: true, mode: 'local_fallback', decks: [] };
+}
+
+async function deletePptDeck(deckId) {
+    if (!deckId) return { success: false };
+
+    if (isMongoConnected()) {
+        try {
+            await PptDeck.deleteOne({ $or: [{ id: deckId }, { filename: deckId }] });
+        } catch (err) {
+            console.warn('[Storage] MongoDB deletePptDeck error:', err.message);
+        }
+    }
+
+    // Attempt to remove physical file if exists
+    try {
+        const filePath = path.join(DOWNLOADS_DIR, path.basename(deckId));
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+        }
+    } catch (e) {
+        // file remove ignore
+    }
+
+    return { success: true };
+}
+
+// ----------------------------------------------------
+// TELEMETRY & SYSTEM HEALTH
+// ----------------------------------------------------
+async function getDatabaseHealth() {
+    const status = getConnectionStatus();
+    let stats = {
+        users: 0,
+        sessions: 0,
+        messages: 0,
+        decks: 0
+    };
+
+    if (status.isConnected) {
+        try {
+            const [userCount, sessionCount, deckCount] = await Promise.all([
+                User.countDocuments().catch(() => 0),
+                ChatSession.countDocuments().catch(() => 0),
+                PptDeck.countDocuments().catch(() => 0)
+            ]);
+            stats.users = userCount;
+            stats.sessions = sessionCount;
+            stats.decks = deckCount;
+        } catch (e) {
+            // ignore stats query error
+        }
+    } else {
+        const localUsers = readLocalUsers();
+        stats.users = localUsers.length;
+    }
+
+    return {
+        ...status,
+        stats: stats
+    };
+}
+
+module.exports = {
+    findUserByEmail,
+    findUserById,
+    createUser,
+    updateUser,
+    updateUserSettings,
+    syncUserProfile,
+    updateUserPreferences,
+    getUserSessions,
+    getSessionById,
+    saveOrUpdateSession,
+    appendMessageToSession,
+    persistConversationToMongo,
+    syncUserSessions,
+    deleteUserSession,
+    savePptDeck,
+    getUserDecks,
+    deletePptDeck,
+    getDatabaseHealth,
+    seedLocalUsersToMongo,
+    migrateLegacyCollections
+};

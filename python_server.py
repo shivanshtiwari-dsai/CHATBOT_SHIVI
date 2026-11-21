@@ -53,7 +53,6 @@ except ImportError:
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
@@ -2803,31 +2802,44 @@ async def query_knowledge(req: KnowledgeQueryRequest):
     return {"results": results}
 
 # ---------------------------------------------------------------------------
-# Static File Mounts & SPA Fallback (Hardened for Vercel Serverless)
+# Static File Handlers & SPA Fallback (Optimized for Vercel Edge CDN & Local)
 # ---------------------------------------------------------------------------
-# Mount generated images if directory exists
-try:
-    if not IMAGES_DIR.exists():
-        IMAGES_DIR.mkdir(parents=True, exist_ok=True)
-    app.mount("/generated_images", StaticFiles(directory=str(IMAGES_DIR)), name="generated_images")
-except Exception as e:
-    logger.warning(f"[Static Mount Warning] Could not mount /generated_images: {e}")
+# Explicit route for generated images without fragile StaticFiles mounts
+@app.get("/generated_images/{filename}")
+async def serve_generated_image(filename: str):
+    candidates = [
+        IMAGES_DIR / filename,
+        ROOT_DIR / "public" / "generated_images" / filename,
+        ROOT_DIR / "generated_images" / filename
+    ]
+    for p in candidates:
+        if p.is_file():
+            return FileResponse(str(p))
+    raise HTTPException(status_code=404, detail="Image not found")
 
-# Explicit favicon route - returns 204 (No Content) if missing, preventing 500 crashes
+# Explicit favicon route - returns icon if present, otherwise 204 (No Content)
 @app.get("/favicon.ico")
 async def favicon():
-    favicon_path = os.path.join(BASE_DIR, "favicon.ico")
-    if os.path.exists(favicon_path) and os.path.isfile(favicon_path):
-        return FileResponse(favicon_path, media_type="image/x-icon")
+    candidates = [
+        os.path.join(BASE_DIR, "public", "favicon.ico"),
+        os.path.join(BASE_DIR, "favicon.ico")
+    ]
+    for fav in candidates:
+        if os.path.exists(fav) and os.path.isfile(fav):
+            return FileResponse(fav, media_type="image/x-icon")
     return Response(status_code=204)
 
-# Serve index.html at root using BASE_DIR
+# Serve index.html at root (checks public/ first, then root)
 @app.get("/")
 async def serve_index():
     try:
-        index_file = os.path.join(BASE_DIR, "index.html")
-        if os.path.exists(index_file) and os.path.isfile(index_file):
-            return FileResponse(index_file, media_type="text/html")
+        index_candidates = [
+            os.path.join(BASE_DIR, "public", "index.html"),
+            os.path.join(BASE_DIR, "index.html")
+        ]
+        for idx in index_candidates:
+            if os.path.exists(idx) and os.path.isfile(idx):
+                return FileResponse(idx, media_type="text/html")
         return JSONResponse({"status": "healthy", "service": "Shivi AI Backend", "notice": "index.html not found"}, status_code=200)
     except Exception as e:
         logger.error(f"[Frontend Serve Error]: {e}")
@@ -2840,8 +2852,10 @@ async def serve_static(file_path: str):
         if file_path == "favicon.ico":
             return Response(status_code=204)
 
-        # First check in ROOT_DIR
-        target = (ROOT_DIR / file_path).resolve()
+        # Check public/ directory first (Vercel CDN layout), then ROOT_DIR
+        target = (ROOT_DIR / "public" / file_path).resolve()
+        if not target.is_file():
+            target = (ROOT_DIR / file_path).resolve()
 
         # Check /tmp for generated downloads/images if running on Vercel
         if IS_VERCEL and not target.is_file():
@@ -2850,7 +2864,8 @@ async def serve_static(file_path: str):
                 target = tmp_target
 
         # Path traversal protection
-        if not str(target).startswith(str(ROOT_DIR)) and not (IS_VERCEL and str(target).startswith("/tmp")):
+        public_dir = ROOT_DIR / "public"
+        if not str(target).startswith(str(ROOT_DIR)) and not str(target).startswith(str(public_dir)) and not (IS_VERCEL and str(target).startswith("/tmp")):
             raise HTTPException(status_code=403, detail="Access forbidden")
 
         if target.is_file():
