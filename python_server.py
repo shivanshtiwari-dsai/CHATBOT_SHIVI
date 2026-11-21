@@ -173,16 +173,15 @@ def verify_auth_token_py(token: str) -> Optional[Dict[str, Any]]:
         return None
 
 # ---------------------------------------------------------------------------
-# MongoDB Database Initialization (Non-blocking / Resilient)
+# MongoDB Database Initialization (Lazy, Resilient, Serverless-Safe)
 # ---------------------------------------------------------------------------
 mongo_client: Any = None
-async_mongo_client: Any = None
 db: Any = None
-async_db: Any = None
 
 MONGO_URI = os.getenv("MONGODB_URI") or os.getenv("MONGO_URI", "")
 
-def get_sync_mongo():
+def get_mongo_db():
+    """Lazily connects to MongoDB using PyMongo with short timeout and connect=False."""
     global mongo_client, db
     if db is not None:
         return db
@@ -197,30 +196,13 @@ def get_sync_mongo():
         logger.info("[MongoDB] Connected successfully to MongoDB via pymongo.")
         return db
     except Exception as e:
-        logger.warning(f"[MongoDB] Sync connection failed (resilient fallback active): {e}")
+        logger.warning(f"[MongoDB] Connection failed or timed out (lazy fallback active): {e}")
         mongo_client = None
         db = None
         return None
 
-async def get_async_mongo():
-    global async_mongo_client, async_db
-    if async_db is not None:
-        return async_db
-    if not MONGO_URI:
-        return None
-    try:
-        # pyrefly: ignore [missing-import]
-        # type: ignore
-        from motor.motor_asyncio import AsyncIOMotorClient
-        async_mongo_client = AsyncIOMotorClient(MONGO_URI, serverSelectionTimeoutMS=4000)
-        async_db = async_mongo_client.get_default_database()
-        logger.info("[MongoDB] Connected successfully to MongoDB via motor.")
-        return async_db
-    except Exception as e:
-        logger.warning(f"[MongoDB] Async connection failed (resilient fallback active): {e}")
-        async_mongo_client = None
-        async_db = None
-        return None
+# Backward compatibility alias
+get_sync_mongo = get_mongo_db
 
 def get_port() -> int:
     try:
@@ -231,32 +213,30 @@ def get_port() -> int:
 # Global Async HTTP Client (re-used for high-concurrency connection pooling)
 http_client: Optional[httpx.AsyncClient] = None
 
+def get_http_client() -> httpx.AsyncClient:
+    """Returns an active httpx.AsyncClient, creating one lazily if needed."""
+    global http_client
+    if http_client is None or http_client.is_closed:
+        http_client = httpx.AsyncClient(
+            limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
+            timeout=httpx.Timeout(45.0, connect=10.0)
+        )
+    return http_client
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global http_client
-    try:
-        limits = httpx.Limits(max_keepalive_connections=20, max_connections=50)
-        timeout = httpx.Timeout(45.0, connect=10.0)
-        http_client = httpx.AsyncClient(limits=limits, timeout=timeout)
-    except Exception as e:
-        logger.warning(f"[Lifespan Init Warning] HTTP Client init: {e}")
-        http_client = None
-
-    try:
-        await get_async_mongo()
-    except Exception as e:
-        logger.warning(f"[Lifespan Init Warning] MongoDB init: {e}")
-
+    # Completely clean, non-blocking startup for instant serverless invocation
     logger.info("🚀 SHIVI AI — HIGH-PERFORMANCE PYTHON FASTAPI ENGINE ACTIVE")
     yield
-    if http_client:
+    global http_client, mongo_client
+    if http_client and not http_client.is_closed:
         try:
             await http_client.aclose()
         except Exception:
             pass
-    if async_mongo_client:
+    if mongo_client:
         try:
-            async_mongo_client.close()
+            mongo_client.close()
         except Exception:
             pass
     logger.info("[Shivi AI] Engine cleanly shut down.")
@@ -645,8 +625,8 @@ async def call_groq(api_key: str, model: str, system_prompt: str, user_msg: str,
     messages.append({"role": "user", "content": user_msg})
 
     max_tok = (options or {}).get("max_tokens", 4096)
-    assert http_client is not None
-    resp = await http_client.post(
+    client = get_http_client()
+    resp = await client.post(
         "https://api.groq.com/openai/v1/chat/completions",
         headers={"Authorization": f"Bearer {api_key}"},
         json={
@@ -679,8 +659,8 @@ async def call_openai(api_key: str, model: str, system_prompt: str, user_msg: st
     messages.append({"role": "user", "content": user_msg})
 
     max_tok = (options or {}).get("max_tokens", 2500)
-    assert http_client is not None
-    resp = await http_client.post(
+    client = get_http_client()
+    resp = await client.post(
         "https://api.openai.com/v1/chat/completions",
         headers={"Authorization": f"Bearer {api_key}"},
         json={
@@ -711,8 +691,8 @@ async def call_openrouter(api_key: str, model: str, system_prompt: str, user_msg
     messages.append({"role": "user", "content": user_msg})
 
     max_tok = (options or {}).get("max_tokens", 2500)
-    assert http_client is not None
-    resp = await http_client.post(
+    client = get_http_client()
+    resp = await client.post(
         "https://openrouter.ai/api/v1/chat/completions",
         headers={
             "Authorization": f"Bearer {api_key}",
@@ -759,8 +739,8 @@ async def call_gemini(api_key: str, model: str, system_prompt: str, user_msg: st
     if system_prompt:
         payload["systemInstruction"] = {"parts": [{"text": system_prompt}]}
 
-    assert http_client is not None
-    resp = await http_client.post(url, json=payload, timeout=35.0)
+    client = get_http_client()
+    resp = await client.post(url, json=payload, timeout=35.0)
     if resp.status_code != 200:
         err_msg = resp.text
         try:
@@ -780,11 +760,7 @@ async def call_gemini(api_key: str, model: str, system_prompt: str, user_msg: st
 # ---------------------------------------------------------------------------
 async def download_image_task(url: str, filepath: Path):
     """Asynchronously downloads image in the background without blocking the client."""
-    client = http_client
-    should_close = False
-    if client is None:
-        client = httpx.AsyncClient(timeout=30.0)
-        should_close = True
+    client = get_http_client()
     try:
         try:
             res = await client.get(url, timeout=30.0)
@@ -815,12 +791,8 @@ async def download_image_task(url: str, filepath: Path):
                         logger.warning(f"[Image Engine Warning] Fallback disk cache write skipped: {fe}")
             except Exception as e2:
                 logger.error(f"[Image Engine Error] Fallback download failed: {e2}")
-    finally:
-        if should_close:
-            try:
-                await client.aclose()
-            except Exception:
-                pass
+    except Exception as general_err:
+        logger.error(f"[Image Engine Error] General download failure: {general_err}")
 
 # ---------------------------------------------------------------------------
 # API Routes
@@ -1183,8 +1155,8 @@ async def generate_image_endpoint(req: ImageRequest, background_tasks: Backgroun
     # Check for OpenAI DALL-E 3
     if (provider == "openai" or (provider == "auto" and api_key.startswith("sk-"))) and api_key:
         try:
-            assert http_client is not None
-            res = await http_client.post(
+            client = get_http_client()
+            res = await client.post(
                 "https://api.openai.com/v1/images/generations",
                 headers={"Authorization": f"Bearer {api_key}"},
                 json={
@@ -2582,8 +2554,8 @@ async def tts_endpoint(req: TTSRequest):
 
     if api_key:
         try:
-            assert http_client is not None
-            res = await http_client.post(
+            client = get_http_client()
+            res = await client.post(
                 "https://api.openai.com/v1/audio/speech",
                 headers={
                     "Authorization": f"Bearer {api_key}",
