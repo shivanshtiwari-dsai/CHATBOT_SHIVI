@@ -189,6 +189,8 @@ def get_sync_mongo():
     if not MONGO_URI:
         return None
     try:
+        # pyrefly: ignore [missing-import]
+        # type: ignore
         from pymongo import MongoClient
         mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=4000, connect=False)
         db = mongo_client.get_default_database()
@@ -207,6 +209,8 @@ async def get_async_mongo():
     if not MONGO_URI:
         return None
     try:
+        # pyrefly: ignore [missing-import]
+        # type: ignore
         from motor.motor_asyncio import AsyncIOMotorClient
         async_mongo_client = AsyncIOMotorClient(MONGO_URI, serverSelectionTimeoutMS=4000)
         async_db = async_mongo_client.get_default_database()
